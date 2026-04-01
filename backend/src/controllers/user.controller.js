@@ -299,7 +299,47 @@ async function cancelOrder(req, res, next) {
   }
 
   await execute("UPDATE orders SET status = 'cancelled' WHERE id = ?", [order.id]);
+
+  await execute(
+    "INSERT INTO notifications(user_id, title, message) VALUES(?,?,?)",
+    [req.user.id, "Đơn hàng đã bị hủy", `Đơn hàng #${order.id} đã được hủy thành công`]
+  );
+
   return res.json({ message: "Hủy đơn hàng thành công" });
+}
+
+// ─── CẬP NHẬT ĐỊA CHỈ ĐƠN HÀNG (chỉ khi status = placed) ───────────────────
+
+async function updateOrderAddress(req, res, next) {
+  const { address_id } = req.body;
+  if (!address_id) return next(new AppError("Thiếu address_id", 400));
+
+  // Kiểm tra đơn hàng tồn tại và thuộc user này
+  const orders = await query(
+    "SELECT * FROM orders WHERE id = ? AND user_id = ?",
+    [req.params.id, req.user.id]
+  );
+  if (!orders.length) return next(new AppError("Đơn hàng không tồn tại", 404));
+  const order = orders[0];
+
+  // Chỉ cho sửa khi đơn ở trạng thái "placed" (chưa xác nhận)
+  if (order.status !== "placed") {
+    return next(new AppError("Chỉ có thể sửa địa chỉ khi đơn hàng chưa được xác nhận", 400));
+  }
+
+  // Kiểm tra địa chỉ thuộc user này
+  const addresses = await query(
+    "SELECT id FROM addresses WHERE id = ? AND user_id = ?",
+    [address_id, req.user.id]
+  );
+  if (!addresses.length) return next(new AppError("Địa chỉ không hợp lệ", 404));
+
+  await execute(
+    "UPDATE orders SET address_id = ? WHERE id = ?",
+    [address_id, req.params.id]
+  );
+
+  return res.json({ message: "Cập nhật địa chỉ thành công" });
 }
 
 // ─── Notifications ────────────────────────────────────────────────────────────
@@ -309,8 +349,7 @@ async function getNotifications(req, res) {
     `SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50`,
     [req.user.id]
   );
-  const unreadCount = rows.filter((n) => !n.is_read).length;
-  return res.json({ notifications: rows, unreadCount });
+  return res.json(rows);
 }
 
 async function readNotification(req, res, next) {
@@ -421,14 +460,13 @@ async function clearSearchHistory(req, res) {
 async function saveViewHistory(req, res, next) {
   const productId = Number(req.body.product_id);
   if (!productId) return next(new AppError("Thiếu product_id", 400));
-  // Avoid duplicates — delete old then insert (upsert pattern)
   await execute("DELETE FROM view_history WHERE user_id = ? AND product_id = ?", [req.user.id, productId]);
   await execute("INSERT INTO view_history(user_id, product_id) VALUES(?,?)", [req.user.id, productId]);
   return res.status(201).json({ message: "Đã lưu lịch sử xem" });
 }
 
 async function getViewHistory(req, res) {
-  if (!req.user) return res.json([]); // chưa đăng nhập → trả về rỗng
+  if (!req.user) return res.json([]);
   const rows = await query(
     `SELECT p.id, p.name, p.price, p.discount, p.stock,
        IFNULL(rv.avg_rating, 0) avg_rating,
@@ -450,7 +488,7 @@ async function getViewHistory(req, res) {
 module.exports = {
   getCart, addCart, updateCart, removeCart, clearCart,
   toggleWishlist, getWishlist,
-  createOrder, myOrders, orderDetail, cancelOrder,
+  createOrder, myOrders, orderDetail, cancelOrder, updateOrderAddress,
   getNotifications, readNotification, readAllNotifications,
   meProfile, updateProfile, changePassword,
   addAddress, updateAddress, deleteAddress,

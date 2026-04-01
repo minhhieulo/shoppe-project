@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import api from "../services/api";
 import { useStore } from "../store/useStore";
 import { io } from "socket.io-client";
@@ -306,7 +306,22 @@ export function CheckoutPage() {
       const { data } = await api.post("/orders", {
         address_id: finalId, payment_method: payment, voucher_code: voucher || undefined,
       });
-      await api.post("/payment/webhook", { orderId: data.orderId, transactionId: `MOCK-${Date.now()}` });
+
+      if (payment === "Mock") {
+        await api.post("/payment/webhook", { orderId: data.orderId, transactionId: `MOCK-${Date.now()}` });
+        notify("Đặt hàng thành công! 🎉");
+        window.location.href = `/orders/${data.orderId}`;
+        return;
+      }
+
+      if (payment === "MOMO") {
+        const momo = await api.post("/payment/momo/create", { orderId: data.orderId });
+        const payUrl = momo.data?.payUrl;
+        if (!payUrl) throw new Error("Không nhận được payUrl từ MoMo");
+        window.location.href = payUrl;
+        return;
+      }
+
       notify("Đặt hàng thành công! 🎉");
       window.location.href = `/orders/${data.orderId}`;
     } catch (err) {
@@ -319,6 +334,7 @@ export function CheckoutPage() {
 
   const PAYMENT_OPTS = [
     { value: "COD",    label: "💵 COD — Thanh toán khi nhận" },
+    { value: "MOMO",   label: "🟣 MoMo (Sandbox)" },
     { value: "VNPay",  label: "🏦 VNPay" },
     { value: "Stripe", label: "💳 Stripe" },
     { value: "PayPal", label: "🅿️ PayPal" },
@@ -482,10 +498,11 @@ export function OrderHistoryPage() {
   const [orders, setOrders] = useState([]);
   const [tab, setTab] = useState("all");
   const user = useStore((s) => s.user);
+  const { key } = useLocation(); // key thay đổi mỗi khi navigate tới trang này
 
   useEffect(() => {
     api.get("/orders/my").then((res) => setOrders(Array.isArray(res.data) ? res.data : []));
-  }, []);
+  }, [key]); // re-fetch mỗi khi quay lại trang
 
   const STATUS = {
     placed:    { label: "Đã đặt",      color: "bg-blue-100 text-blue-600",    icon: "📋" },
@@ -496,13 +513,17 @@ export function OrderHistoryPage() {
   };
   const TABS = [
     { key: "all",       label: "Tất cả" },
-    { key: "placed",    label: "Chờ xác nhận" },
+    { key: "pending",   label: "Chờ xác nhận" },
     { key: "shipping",  label: "Đang giao" },
     { key: "delivered", label: "Đã nhận" },
     { key: "cancelled", label: "Đã huỷ" },
   ];
 
-  const filtered = tab === "all" ? orders : orders.filter(o => o.status === tab);
+  const filtered = tab === "all"
+    ? orders
+    : tab === "pending"
+      ? orders.filter(o => o.status === "placed" || o.status === "confirmed")
+      : orders.filter(o => o.status === tab);
 
   return (
     <AccountLayout user={user}>
@@ -714,7 +735,11 @@ export function NotificationPage() {
   const [notis, setNotis] = useState([]);
   const user = useStore((s) => s.user);
 
-  const load = () => api.get("/notifications").then((res) => setNotis(Array.isArray(res.data) ? res.data : []));
+  const load = () => api.get("/notifications").then((res) => {
+    // Backend giờ trả về array trực tiếp
+    const list = Array.isArray(res.data) ? res.data : (res.data?.notifications ?? []);
+    setNotis(list);
+  });
   useEffect(() => { load(); }, []);
 
   const markAll = async () => {

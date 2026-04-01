@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import api from "../services/api";
@@ -50,39 +50,89 @@ export default function OrderDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const notify = useStore((s) => s.notify);
+  const increaseCartCount = useStore((s) => s.increaseCartCount);
+
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
 
-  const load = async () => {
+  // ── Sửa địa chỉ (chỉ khi status = placed) ──────────────────────────────────
+  const [editingAddress, setEditingAddress] = useState(false);
+  const [addressList, setAddressList] = useState([]);
+  const [selectedAddressId, setSelectedAddressId] = useState(null);
+  const [savingAddress, setSavingAddress] = useState(false);
+
+  // ── Đặt lại (khi cancelled) ─────────────────────────────────────────────────
+  const [reordering, setReordering] = useState(false);
+
+  const load = useCallback(async (showLoading = false) => {
+    if (showLoading) setLoading(true);
     try {
       const res = await api.get(`/orders/${id}`);
-      setDetail(res.data?.items ? res.data : { order: res.data, items: [] });
+      const { items = [], address, ...order } = res.data;
+      setDetail({ order, items, address });
+      setSelectedAddressId(order.address_id || null);
     } catch {
       notify("Không tải được đơn hàng", "error");
     } finally {
       setLoading(false);
     }
+  }, [id]);
+
+  useEffect(() => { load(true); }, [id]);
+
+  // Tải danh sách địa chỉ khi bấm "Sửa địa chỉ"
+  const openEditAddress = async () => {
+    try {
+      const res = await api.get("/profile");
+      setAddressList(res.data.addresses || []);
+      setEditingAddress(true);
+    } catch {
+      notify("Không tải được danh sách địa chỉ", "error");
+    }
   };
 
-  useEffect(() => { load(); }, [id]);
+  const handleSaveAddress = async () => {
+    if (!selectedAddressId) return notify("Vui lòng chọn địa chỉ", "error");
+    setSavingAddress(true);
+    try {
+      await api.put(`/orders/${id}/address`, { address_id: selectedAddressId });
+      notify("✅ Cập nhật địa chỉ thành công");
+      setEditingAddress(false);
+      load(false); // reload lại để hiển thị địa chỉ mới
+    } catch (err) {
+      notify(err.response?.data?.message || "Không thể cập nhật địa chỉ", "error");
+    } finally {
+      setSavingAddress(false);
+    }
+  };
 
-  const order = detail?.order ?? detail;
-  const items = detail?.items ?? [];
-  const address = detail?.address;
-
-  const currentStep = useMemo(() => {
-    if (order?.status === "cancelled") return -1;
-    return STEPS.indexOf(order?.status || "placed");
-  }, [order]);
+  // Đặt lại đơn đã hủy — thêm tất cả sản phẩm vào giỏ rồi chuyển sang trang giỏ hàng
+  const handleReorder = async () => {
+    setReordering(true);
+    try {
+      const items = detail?.items ?? [];
+      for (const item of items) {
+        await api.post("/cart/add", { product_id: item.product_id, quantity: item.quantity });
+      }
+      increaseCartCount(items.reduce((s, i) => s + i.quantity, 0));
+      notify("✅ Đã thêm vào giỏ hàng, kiểm tra và đặt lại nhé!");
+      navigate("/cart");
+    } catch (err) {
+      notify(err.response?.data?.message || "Có lỗi khi thêm vào giỏ hàng", "error");
+    } finally {
+      setReordering(false);
+    }
+  };
 
   const handleCancel = async () => {
-    if (!confirm("Bạn có chắc muốn hủy đơn hàng này?")) return;
     setCancelling(true);
+    setShowConfirm(false);
     try {
       await api.put(`/orders/${id}/cancel`);
       notify("✅ Hủy đơn hàng thành công");
-      await load();
+      navigate("/orders", { replace: true, state: { cancelledAt: Date.now() } });
     } catch (err) {
       notify(err.response?.data?.message || "Không thể hủy đơn hàng", "error");
     } finally {
@@ -94,13 +144,13 @@ export default function OrderDetailPage() {
     <div className="min-h-screen bg-gray-50">
       <div className="mx-auto max-w-3xl space-y-4 p-4">
         {[1, 2, 3].map((i) => (
-          <div key={i} className={`h-${i === 1 ? 24 : i === 2 ? 48 : 32} animate-pulse rounded-3xl bg-gray-100`} style={{ height: i === 1 ? 96 : i === 2 ? 192 : 128 }} />
+          <div key={i} className="animate-pulse rounded-3xl bg-gray-100" style={{ height: i === 1 ? 96 : i === 2 ? 192 : 128 }} />
         ))}
       </div>
     </div>
   );
 
-  if (!order) return (
+  if (!detail?.order) return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-gray-50 text-gray-400">
       <div className="flex h-24 w-24 items-center justify-center rounded-3xl bg-gray-100 text-5xl mb-4">😕</div>
       <p className="text-base font-semibold text-gray-600">Không tìm thấy đơn hàng</p>
@@ -113,9 +163,18 @@ export default function OrderDetailPage() {
     </div>
   );
 
+  const order = detail.order;
+  const items = detail.items ?? [];
+  const address = detail.address;
+
   const cfg = STEP_CONFIG[order.status] || STEP_CONFIG.placed;
+  const currentStep = order.status === "cancelled" ? -1 : STEPS.indexOf(order.status || "placed");
+
+  // Chỉ cho sửa địa chỉ khi đơn đang ở trạng thái "placed" (chưa xác nhận)
+  const canEditAddress = order.status === "placed";
 
   return (
+    <>
     <div className="min-h-screen bg-gray-50">
       <div className="mx-auto max-w-3xl space-y-4 p-4">
 
@@ -145,18 +204,30 @@ export default function OrderDetailPage() {
             </div>
           </div>
 
-          {/* Cancel button */}
-          {["placed", "confirmed"].includes(order.status) && (
-            <div className="px-5 py-3 border-t border-gray-100 flex justify-end">
+          {/* Action buttons */}
+          <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-end gap-3">
+            {/* Hủy đơn — chỉ khi placed hoặc confirmed */}
+            {["placed", "confirmed"].includes(order.status) && (
               <button
-                onClick={handleCancel}
+                onClick={() => setShowConfirm(true)}
                 disabled={cancelling}
                 className="rounded-xl border-2 border-red-200 px-4 py-1.5 text-xs font-bold text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50"
               >
                 {cancelling ? "Đang hủy..." : "Hủy đơn hàng"}
               </button>
-            </div>
-          )}
+            )}
+
+            {/* Đặt lại — chỉ khi cancelled */}
+            {order.status === "cancelled" && (
+              <button
+                onClick={handleReorder}
+                disabled={reordering}
+                className="rounded-xl bg-gradient-to-r from-orange-500 to-red-500 px-4 py-1.5 text-xs font-bold text-white shadow-md shadow-orange-200 hover:brightness-105 transition-all disabled:opacity-50"
+              >
+                {reordering ? "Đang xử lý..." : "🔄 Đặt lại"}
+              </button>
+            )}
+          </div>
         </motion.div>
 
         {/* Progress tracker */}
@@ -169,7 +240,6 @@ export default function OrderDetailPage() {
           >
             <h2 className="mb-6 text-sm font-bold uppercase tracking-widest text-gray-400">Trạng thái đơn hàng</h2>
             <div className="relative">
-              {/* Track line */}
               <div className="absolute top-5 left-5 right-5 h-0.5 bg-gray-200" style={{ zIndex: 0 }} />
               <motion.div
                 className="absolute top-5 left-5 h-0.5 bg-gradient-to-r from-orange-400 to-red-500"
@@ -178,11 +248,10 @@ export default function OrderDetailPage() {
                 animate={{ width: currentStep >= 0 ? `${(currentStep / (STEPS.length - 1)) * (100 - (10 / STEPS.length * 2))}%` : "0%" }}
                 transition={{ duration: 0.6, ease: "easeOut" }}
               />
-
               <div className="relative flex justify-between" style={{ zIndex: 2 }}>
                 {STEPS.map((step, idx) => {
                   const done = idx <= currentStep;
-                  const cfg = STEP_CONFIG[step];
+                  const stepCfg = STEP_CONFIG[step];
                   return (
                     <div key={step} className="flex flex-col items-center gap-2">
                       <motion.div
@@ -195,10 +264,10 @@ export default function OrderDetailPage() {
                             : "bg-white border-2 border-gray-200 text-gray-400"
                         }`}
                       >
-                        {cfg.icon}
+                        {stepCfg.icon}
                       </motion.div>
                       <span className={`text-xs font-medium text-center max-w-[60px] leading-tight ${done ? "text-orange-600" : "text-gray-400"}`}>
-                        {cfg.label}
+                        {stepCfg.label}
                       </span>
                     </div>
                   );
@@ -209,19 +278,86 @@ export default function OrderDetailPage() {
         )}
 
         {/* Delivery address */}
-        {address && (
+        {(address || canEditAddress) && (
           <motion.div
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.15 }}
             className="rounded-3xl bg-white p-5 shadow-sm"
           >
-            <h2 className="mb-3 text-sm font-bold uppercase tracking-widest text-gray-400">📍 Địa chỉ giao hàng</h2>
-            <div className="rounded-2xl bg-gray-50 px-4 py-3">
-              <p className="text-sm font-bold text-gray-800">{address.name}</p>
-              <p className="text-sm text-gray-500 mt-0.5">{address.phone}</p>
-              <p className="text-sm text-gray-500">{address.address}{address.city ? `, ${address.city}` : ""}</p>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-bold uppercase tracking-widest text-gray-400">📍 Địa chỉ giao hàng</h2>
+              {/* Nút sửa — chỉ hiện khi placed (chưa xác nhận) */}
+              {canEditAddress && !editingAddress && (
+                <button
+                  onClick={openEditAddress}
+                  className="text-xs font-bold text-orange-500 hover:text-orange-700 transition-colors"
+                >
+                  ✏️ Sửa địa chỉ
+                </button>
+              )}
             </div>
+
+            {/* Chế độ xem */}
+            {!editingAddress && address && (
+              <div className="rounded-2xl bg-gray-50 px-4 py-3">
+                <p className="text-sm font-bold text-gray-800">{address.name}</p>
+                <p className="text-sm text-gray-500 mt-0.5">{address.phone}</p>
+                <p className="text-sm text-gray-500">{address.address}{address.city ? `, ${address.city}` : ""}</p>
+              </div>
+            )}
+
+            {/* Chế độ sửa — chọn từ danh sách địa chỉ */}
+            {editingAddress && (
+              <div className="space-y-3">
+                {addressList.length === 0 ? (
+                  <p className="text-sm text-gray-400 text-center py-4">Bạn chưa có địa chỉ nào. Hãy thêm địa chỉ trong hồ sơ.</p>
+                ) : (
+                  addressList.map((addr) => (
+                    <label
+                      key={addr.id}
+                      className={`flex items-start gap-3 rounded-2xl border-2 p-3 cursor-pointer transition-all ${
+                        selectedAddressId === addr.id
+                          ? "border-orange-400 bg-orange-50"
+                          : "border-gray-200 bg-gray-50 hover:border-gray-300"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="address"
+                        className="mt-0.5 accent-orange-500"
+                        checked={selectedAddressId === addr.id}
+                        onChange={() => setSelectedAddressId(addr.id)}
+                      />
+                      <div>
+                        <p className="text-sm font-bold text-gray-800">{addr.name}</p>
+                        <p className="text-xs text-gray-500">{addr.phone}</p>
+                        <p className="text-xs text-gray-500">{addr.address}{addr.city ? `, ${addr.city}` : ""}</p>
+                        {addr.is_default === 1 && (
+                          <span className="mt-1 inline-block rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-bold text-orange-600">Mặc định</span>
+                        )}
+                      </div>
+                    </label>
+                  ))
+                )}
+
+                <div className="flex gap-2 pt-1">
+                  <button
+                    onClick={() => setEditingAddress(false)}
+                    className="flex-1 rounded-xl border-2 border-gray-200 py-2 text-xs font-bold text-gray-600 hover:bg-gray-50 transition-colors"
+                  >
+                    Hủy
+                  </button>
+                  <button
+                    onClick={handleSaveAddress}
+                    disabled={savingAddress || !selectedAddressId}
+                    className="flex-1 rounded-xl bg-gradient-to-r from-orange-500 to-red-500 py-2 text-xs font-bold text-white shadow-md shadow-orange-200 hover:brightness-105 transition-all disabled:opacity-50"
+                  >
+                    {savingAddress ? "Đang lưu..." : "Lưu địa chỉ"}
+                  </button>
+                </div>
+              </div>
+            )}
           </motion.div>
         )}
 
@@ -302,5 +438,40 @@ export default function OrderDetailPage() {
 
       </div>
     </div>
+
+    {/* Modal xác nhận hủy đơn */}
+    {showConfirm && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowConfirm(false)} />
+        <motion.div
+          initial={{ opacity: 0, scale: 0.92, y: 8 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          transition={{ duration: 0.18 }}
+          className="relative w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl"
+        >
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-red-50 text-3xl">🗑️</div>
+          <h3 className="text-center text-lg font-black text-gray-800">Hủy đơn hàng?</h3>
+          <p className="mt-2 text-center text-sm text-gray-500">
+            Đơn <span className="font-semibold text-gray-700">#{order.id}</span> sẽ bị hủy và không thể hoàn tác.
+          </p>
+          <div className="mt-6 flex gap-3">
+            <button
+              onClick={() => setShowConfirm(false)}
+              className="flex-1 rounded-2xl border-2 border-gray-200 py-2.5 text-sm font-bold text-gray-600 hover:bg-gray-50 transition-colors"
+            >
+              Giữ lại
+            </button>
+            <button
+              onClick={handleCancel}
+              disabled={cancelling}
+              className="flex-1 rounded-2xl bg-gradient-to-r from-red-500 to-rose-500 py-2.5 text-sm font-bold text-white shadow-lg shadow-red-200 hover:brightness-105 transition-all disabled:opacity-50"
+            >
+              {cancelling ? "Đang hủy..." : "Xác nhận hủy"}
+            </button>
+          </div>
+        </motion.div>
+      </div>
+    )}
+    </>
   );
 }

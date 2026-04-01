@@ -11,7 +11,7 @@ const {
 const {
   getCart, addCart, updateCart, removeCart, clearCart,
   toggleWishlist, getWishlist,
-  createOrder, myOrders, orderDetail, cancelOrder,
+  createOrder, myOrders, orderDetail, cancelOrder, updateOrderAddress,
   getNotifications, readNotification, readAllNotifications,
   meProfile, updateProfile, changePassword,
   addAddress, updateAddress, deleteAddress,
@@ -46,10 +46,11 @@ router.get("/wishlist",          auth(), asyncHandler(getWishlist));
 router.post("/wishlist/toggle",  auth(), asyncHandler(toggleWishlist));
 
 // ─── Orders ───────────────────────────────────────────────────────────────────
-router.post("/orders",           auth(), asyncHandler(createOrder));
-router.get("/orders/my",         auth(), asyncHandler(myOrders));
-router.get("/orders/:id",        auth(), asyncHandler(orderDetail));
-router.put("/orders/:id/cancel", auth(), asyncHandler(cancelOrder));
+router.post("/orders",                   auth(), asyncHandler(createOrder));
+router.get("/orders/my",                 auth(), asyncHandler(myOrders));
+router.get("/orders/:id",                auth(), asyncHandler(orderDetail));
+router.put("/orders/:id/cancel",         auth(), asyncHandler(cancelOrder));
+router.put("/orders/:id/address",        auth(), asyncHandler(updateOrderAddress)); // ← MỚI
 
 // ─── Notifications ────────────────────────────────────────────────────────────
 router.get("/notifications",         auth(), asyncHandler(getNotifications));

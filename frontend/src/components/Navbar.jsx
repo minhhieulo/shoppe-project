@@ -100,6 +100,12 @@ export default function Navbar() {
           <div className="flex items-center gap-4">
             {/* Notification bell */}
             <div className="relative">
+              {showNoti && (
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setShowNoti(false)}
+                />
+              )}
               <button
                 onClick={() => { const next = !showNoti; setShowNoti(next); setShowUserMenu(false); if (next) fetchNotis(); }}
                 className="relative flex items-center gap-1 text-orange-100 hover:text-white transition-colors"
@@ -277,6 +283,12 @@ export default function Navbar() {
             {/* User menu */}
             {user ? (
               <div className="relative">
+                {showUserMenu && (
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setShowUserMenu(false)}
+                  />
+                )}
                 <button
                   onClick={() => { setShowUserMenu((s) => !s); setShowNoti(false); }}
                   className="flex items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20 transition-colors"
@@ -304,7 +316,7 @@ export default function Navbar() {
                       </div>
                       {[
                         { to: "/profile", icon: "👤", label: "Tài khoản của tôi" },
-                        { to: "/orders/my", icon: "📦", label: "Đơn mua" },
+                        { to: "/orders", icon: "📦", label: "Đơn hàng" },
                         { to: "/wishlist", icon: "❤️", label: "Yêu thích" },
                       ].map(({ to, icon, label }) => (
                         <Link
