@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import api from "../services/api";
 import { formatPrice } from "../utils/format";
 import { useStore } from "../store/useStore";
@@ -8,43 +8,27 @@ import { useStore } from "../store/useStore";
 const STEPS = ["placed", "confirmed", "shipping", "delivered"];
 
 const STEP_CONFIG = {
-  placed:    { icon: "📋", label: "Đã đặt hàng", color: "from-blue-400 to-blue-600" },
-  confirmed: { icon: "✅", label: "Đã xác nhận",  color: "from-yellow-400 to-yellow-600" },
-  shipping:  { icon: "🚚", label: "Đang giao",    color: "from-orange-400 to-orange-600" },
-  delivered: { icon: "📦", label: "Đã nhận hàng", color: "from-green-400 to-green-600" },
-  cancelled: { icon: "❌", label: "Đã hủy",       color: "from-red-400 to-red-600" },
+  placed:    { icon: "📋", label: "Đặt hàng",  color: "#6366f1" },
+  confirmed: { icon: "✅", label: "Xác nhận",  color: "#0ea5e9" },
+  shipping:  { icon: "🚚", label: "Đang giao", color: "#f59e0b" },
+  delivered: { icon: "🎁", label: "Đã nhận",   color: "#10b981" },
+  cancelled: { icon: "✕",  label: "Đã hủy",   color: "#ef4444" },
 };
 
-const STATUS_PILL = {
-  placed:    "bg-blue-50 text-blue-700 border-blue-200",
-  confirmed: "bg-yellow-50 text-yellow-700 border-yellow-200",
-  shipping:  "bg-orange-50 text-orange-700 border-orange-200",
-  delivered: "bg-green-50 text-green-700 border-green-200",
-  cancelled: "bg-red-50 text-red-700 border-red-200",
+const STATUS_CONFIG = {
+  placed:    { text: "Chờ xác nhận", cls: "status-indigo" },
+  confirmed: { text: "Đã xác nhận", cls: "status-sky" },
+  shipping:  { text: "Đang giao",   cls: "status-amber" },
+  delivered: { text: "Hoàn thành",  cls: "status-emerald" },
+  cancelled: { text: "Đã hủy",     cls: "status-red" },
 };
 
-const PAYMENT_PILL = {
-  pending:  "bg-yellow-50 text-yellow-700",
-  paid:     "bg-green-50 text-green-700",
-  failed:   "bg-red-50 text-red-700",
-  refunded: "bg-purple-50 text-purple-700",
+const PAYMENT_CONFIG = {
+  pending:  { text: "Chờ thanh toán", cls: "status-amber" },
+  paid:     { text: "Đã thanh toán",  cls: "status-emerald" },
+  failed:   { text: "Thất bại",       cls: "status-red" },
+  refunded: { text: "Đã hoàn tiền",  cls: "status-purple" },
 };
-
-const PAYMENT_LABEL = {
-  pending: "Chờ thanh toán",
-  paid: "Đã thanh toán",
-  failed: "Thất bại",
-  refunded: "Đã hoàn tiền",
-};
-
-function InfoRow({ label, value, highlight }) {
-  return (
-    <div className="flex items-center justify-between py-2.5 border-b border-gray-100 last:border-0">
-      <span className="text-sm text-gray-500">{label}</span>
-      <span className={`text-sm font-semibold ${highlight ? "text-orange-600 text-base" : "text-gray-800"}`}>{value}</span>
-    </div>
-  );
-}
 
 export default function OrderDetailPage() {
   const { id } = useParams();
@@ -56,14 +40,10 @@ export default function OrderDetailPage() {
   const [loading, setLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
-
-  // ── Sửa địa chỉ (chỉ khi status = placed) ──────────────────────────────────
   const [editingAddress, setEditingAddress] = useState(false);
   const [addressList, setAddressList] = useState([]);
   const [selectedAddressId, setSelectedAddressId] = useState(null);
   const [savingAddress, setSavingAddress] = useState(false);
-
-  // ── Đặt lại (khi cancelled) ─────────────────────────────────────────────────
   const [reordering, setReordering] = useState(false);
 
   const load = useCallback(async (showLoading = false) => {
@@ -82,7 +62,6 @@ export default function OrderDetailPage() {
 
   useEffect(() => { load(true); }, [id]);
 
-  // Tải danh sách địa chỉ khi bấm "Sửa địa chỉ"
   const openEditAddress = async () => {
     try {
       const res = await api.get("/profile");
@@ -100,7 +79,7 @@ export default function OrderDetailPage() {
       await api.put(`/orders/${id}/address`, { address_id: selectedAddressId });
       notify("✅ Cập nhật địa chỉ thành công");
       setEditingAddress(false);
-      load(false); // reload lại để hiển thị địa chỉ mới
+      load(false);
     } catch (err) {
       notify(err.response?.data?.message || "Không thể cập nhật địa chỉ", "error");
     } finally {
@@ -108,7 +87,6 @@ export default function OrderDetailPage() {
     }
   };
 
-  // Đặt lại đơn đã hủy — thêm tất cả sản phẩm vào giỏ rồi chuyển sang trang giỏ hàng
   const handleReorder = async () => {
     setReordering(true);
     try {
@@ -117,7 +95,7 @@ export default function OrderDetailPage() {
         await api.post("/cart/add", { product_id: item.product_id, quantity: item.quantity });
       }
       increaseCartCount(items.reduce((s, i) => s + i.quantity, 0));
-      notify("✅ Đã thêm vào giỏ hàng, kiểm tra và đặt lại nhé!");
+      notify("✅ Đã thêm vào giỏ hàng!");
       navigate("/cart");
     } catch (err) {
       notify(err.response?.data?.message || "Có lỗi khi thêm vào giỏ hàng", "error");
@@ -140,338 +118,936 @@ export default function OrderDetailPage() {
     }
   };
 
+  /* ── Loading skeleton ── */
   if (loading) return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="mx-auto max-w-3xl space-y-4 p-4">
-        {[1, 2, 3].map((i) => (
-          <div key={i} className="animate-pulse rounded-3xl bg-gray-100" style={{ height: i === 1 ? 96 : i === 2 ? 192 : 128 }} />
-        ))}
+    <div className="od-page">
+      <style>{STYLES}</style>
+      <div className="od-inner">
+        <div className="od-skeleton" style={{ height: 80, borderRadius: 16 }} />
+        <div className="od-skeleton" style={{ height: 140, borderRadius: 16 }} />
+        <div className="od-skeleton" style={{ height: 180, borderRadius: 16 }} />
+        <div className="od-skeleton" style={{ height: 200, borderRadius: 16 }} />
       </div>
     </div>
   );
 
   if (!detail?.order) return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-gray-50 text-gray-400">
-      <div className="flex h-24 w-24 items-center justify-center rounded-3xl bg-gray-100 text-5xl mb-4">😕</div>
-      <p className="text-base font-semibold text-gray-600">Không tìm thấy đơn hàng</p>
-      <button
-        className="mt-4 rounded-2xl bg-orange-500 px-6 py-2.5 text-sm font-bold text-white shadow-lg shadow-orange-200 hover:brightness-105 transition-all"
-        onClick={() => navigate("/orders")}
-      >
-        Quay lại đơn hàng
-      </button>
+    <div className="od-page" style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <style>{STYLES}</style>
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontSize: 64, marginBottom: 16 }}>😕</div>
+        <p style={{ fontSize: 16, fontWeight: 600, color: "#64748b", marginBottom: 20 }}>Không tìm thấy đơn hàng</p>
+        <button className="od-btn-primary" onClick={() => navigate("/orders")}>Quay lại danh sách đơn</button>
+      </div>
     </div>
   );
 
-  const order = detail.order;
-  const items = detail.items ?? [];
-  const address = detail.address;
-
-  const cfg = STEP_CONFIG[order.status] || STEP_CONFIG.placed;
+  const { order, items = [], address } = detail;
+  const statusCfg = STATUS_CONFIG[order.status] || STATUS_CONFIG.placed;
   const currentStep = order.status === "cancelled" ? -1 : STEPS.indexOf(order.status || "placed");
-
-  // Chỉ cho sửa địa chỉ khi đơn đang ở trạng thái "placed" (chưa xác nhận)
   const canEditAddress = order.status === "placed";
+  const subtotal = (order.total_price || 0) - (order.shipping_fee || 0) + (order.discount_amount || 0);
+  const canCancel = ["placed", "confirmed"].includes(order.status);
+  const isDelivered = order.status === "delivered";
+  const isCancelled = order.status === "cancelled";
 
   return (
     <>
-    <div className="min-h-screen bg-gray-50">
-      <div className="mx-auto max-w-3xl space-y-4 p-4">
+      <style>{STYLES}</style>
 
-        {/* Header card */}
-        <motion.div
-          initial={{ opacity: 0, y: -8 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="rounded-3xl bg-white shadow-sm overflow-hidden"
-        >
-          <div className={`bg-gradient-to-r ${cfg.color} p-5 text-white`}>
-            <button onClick={() => navigate(-1)} className="mb-2 flex items-center gap-1 text-xs text-white/80 hover:text-white transition-colors">
-              ← Quay lại
-            </button>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-2xl">{cfg.icon}</span>
-                  <h1 className="text-xl font-black">Đơn #{order.id}</h1>
-                </div>
-                <p className="mt-0.5 text-sm text-white/80">
-                  {order.created_at ? new Date(order.created_at).toLocaleString("vi-VN") : ""}
-                </p>
-              </div>
-              <span className="rounded-2xl bg-white/20 backdrop-blur-sm px-3 py-1.5 text-sm font-bold">
-                {cfg.label}
-              </span>
-            </div>
-          </div>
+      <div className="od-page">
+        <div className="od-inner">
 
-          {/* Action buttons */}
-          <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-end gap-3">
-            {/* Hủy đơn — chỉ khi placed hoặc confirmed */}
-            {["placed", "confirmed"].includes(order.status) && (
-              <button
-                onClick={() => setShowConfirm(true)}
-                disabled={cancelling}
-                className="rounded-xl border-2 border-red-200 px-4 py-1.5 text-xs font-bold text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50"
-              >
-                {cancelling ? "Đang hủy..." : "Hủy đơn hàng"}
-              </button>
-            )}
-
-            {/* Đặt lại — chỉ khi cancelled */}
-            {order.status === "cancelled" && (
-              <button
-                onClick={handleReorder}
-                disabled={reordering}
-                className="rounded-xl bg-gradient-to-r from-orange-500 to-red-500 px-4 py-1.5 text-xs font-bold text-white shadow-md shadow-orange-200 hover:brightness-105 transition-all disabled:opacity-50"
-              >
-                {reordering ? "Đang xử lý..." : "🔄 Đặt lại"}
-              </button>
-            )}
-          </div>
-        </motion.div>
-
-        {/* Progress tracker */}
-        {order.status !== "cancelled" && (
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-            className="rounded-3xl bg-white p-6 shadow-sm"
+          {/* Back */}
+          <motion.button
+            className="od-back"
+            onClick={() => navigate(-1)}
+            initial={{ opacity: 0, x: -8 }}
+            animate={{ opacity: 1, x: 0 }}
           >
-            <h2 className="mb-6 text-sm font-bold uppercase tracking-widest text-gray-400">Trạng thái đơn hàng</h2>
-            <div className="relative">
-              <div className="absolute top-5 left-5 right-5 h-0.5 bg-gray-200" style={{ zIndex: 0 }} />
-              <motion.div
-                className="absolute top-5 left-5 h-0.5 bg-gradient-to-r from-orange-400 to-red-500"
-                style={{ zIndex: 1 }}
-                initial={{ width: 0 }}
-                animate={{ width: currentStep >= 0 ? `${(currentStep / (STEPS.length - 1)) * (100 - (10 / STEPS.length * 2))}%` : "0%" }}
-                transition={{ duration: 0.6, ease: "easeOut" }}
-              />
-              <div className="relative flex justify-between" style={{ zIndex: 2 }}>
+            <span className="od-back-arrow">←</span>
+            <span>Quay lại</span>
+          </motion.button>
+
+          {/* Header */}
+          <motion.div
+            className="od-card od-card-header"
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+          >
+            <div className="od-header-content">
+              <div className="od-header-left">
+                <div className="od-order-id">Đơn #{order.id}</div>
+                <div className="od-order-date">
+                  🕐 {order.created_at ? new Date(order.created_at).toLocaleString("vi-VN") : ""}
+                </div>
+              </div>
+              <span className={`od-badge ${statusCfg.cls}`}>{statusCfg.text}</span>
+            </div>
+
+            {/* CTA Buttons */}
+            <div className="od-actions">
+              {canCancel && (
+                <button className="od-btn-outline" onClick={() => setShowConfirm(true)} disabled={cancelling}>
+                  <span>🗑</span> {cancelling ? "Đang hủy..." : "Hủy đơn"}
+                </button>
+              )}
+              {isCancelled && (
+                <button className="od-btn-primary" onClick={handleReorder} disabled={reordering}>
+                  <span>🔄</span> {reordering ? "Đang xử lý..." : "Đặt lại"}
+                </button>
+              )}
+              {isDelivered && (
+                <>
+                  <button className="od-btn-ghost-action" onClick={handleReorder} disabled={reordering}>
+                    <span>🛒</span> {reordering ? "Đang xử lý..." : "Mua lại"}
+                  </button>
+                  <button className="od-btn-primary" onClick={() => navigate(`/review?order=${order.id}`)}>
+                    <span>⭐</span> Đánh giá
+                  </button>
+                </>
+              )}
+              {order.status === "shipping" && (
+                <button className="od-btn-ghost-action" onClick={() => notify("Tính năng đang phát triển")}>
+                  <span>📞</span> Liên hệ shop
+                </button>
+              )}
+            </div>
+          </motion.div>
+
+          {/* Progress Tracker */}
+          {!isCancelled ? (
+            <motion.div
+              className="od-card od-card-body"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.08 }}
+            >
+              <div className="od-section-title">📦 Trạng thái đơn hàng</div>
+              <div className="od-steps">
                 {STEPS.map((step, idx) => {
                   const done = idx <= currentStep;
+                  const isCurrent = idx === currentStep;
                   const stepCfg = STEP_CONFIG[step];
+                  const lineActive = idx < currentStep;
                   return (
-                    <div key={step} className="flex flex-col items-center gap-2">
+                    <div key={step} className="od-step">
+                      {idx < STEPS.length - 1 && (
+                        <div className={`od-step-line ${lineActive ? "active" : ""}`}>
+                          {lineActive && <div className="od-step-line-fill" />}
+                        </div>
+                      )}
                       <motion.div
-                        initial={{ scale: 0.8 }}
-                        animate={{ scale: 1 }}
-                        transition={{ delay: idx * 0.1 + 0.2 }}
-                        className={`flex h-10 w-10 items-center justify-center rounded-full text-base shadow-sm transition-all ${
-                          done
-                            ? "bg-gradient-to-br from-orange-400 to-red-500 text-white shadow-orange-200"
-                            : "bg-white border-2 border-gray-200 text-gray-400"
-                        }`}
+                        className={`od-step-dot ${done ? "done" : "pending"} ${isCurrent ? "current" : ""}`}
+                        style={done ? { background: stepCfg.color, boxShadow: `0 0 0 5px ${stepCfg.color}22, 0 4px 12px ${stepCfg.color}44` } : {}}
+                        initial={{ scale: 0.7, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        transition={{ delay: idx * 0.1 + 0.15, type: "spring", stiffness: 300 }}
                       >
-                        {stepCfg.icon}
+                        {done ? stepCfg.icon : <span style={{ color: "#cbd5e1", fontSize: 12 }}>○</span>}
+                        {isCurrent && <span className="od-step-pulse" style={{ borderColor: stepCfg.color }} />}
                       </motion.div>
-                      <span className={`text-xs font-medium text-center max-w-[60px] leading-tight ${done ? "text-orange-600" : "text-gray-400"}`}>
+                      <motion.span
+                        className={`od-step-label ${done ? "done" : "pending"}`}
+                        style={isCurrent ? { color: stepCfg.color, fontWeight: 700 } : {}}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ delay: idx * 0.1 + 0.2 }}
+                      >
                         {stepCfg.label}
-                      </span>
+                        {isCurrent && <span className="od-step-now-badge">Hiện tại</span>}
+                      </motion.span>
                     </div>
                   );
                 })}
               </div>
-            </div>
-          </motion.div>
-        )}
+            </motion.div>
+          ) : (
+            <motion.div className="od-card od-card-body" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.08 }}>
+              <div className="od-cancelled-banner">
+                <div className="od-cancelled-dot">✕</div>
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: "#ef4444" }}>Đơn hàng đã bị hủy</div>
+                  <div style={{ fontSize: 13, color: "#fca5a5", marginTop: 3 }}>Bạn có thể đặt lại bằng nút "Đặt lại" ở trên.</div>
+                </div>
+              </div>
+            </motion.div>
+          )}
 
-        {/* Delivery address */}
-        {(address || canEditAddress) && (
+          {/* Delivery Address */}
+          {(address || canEditAddress) && (
+            <motion.div
+              className="od-card od-card-body"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.14 }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                <div className="od-section-title" style={{ marginBottom: 0 }}>📍 Địa chỉ giao hàng</div>
+                {canEditAddress && !editingAddress && (
+                  <button className="od-edit-btn" onClick={openEditAddress}>Sửa địa chỉ</button>
+                )}
+              </div>
+
+              {!editingAddress && address && (
+                <div className="od-address-box">
+                  <div className="od-address-name">{address.name} · {address.phone}</div>
+                  <div className="od-address-detail">{address.address}{address.city ? `, ${address.city}` : ""}</div>
+                </div>
+              )}
+
+              {editingAddress && (
+                <div>
+                  {addressList.length === 0 ? (
+                    <p style={{ fontSize: 13, color: "#aaa", textAlign: "center", padding: "16px 0" }}>
+                      Bạn chưa có địa chỉ nào. Thêm địa chỉ trong hồ sơ.
+                    </p>
+                  ) : (
+                    addressList.map((addr) => (
+                      <div
+                        key={addr.id}
+                        className={`od-addr-option ${selectedAddressId === addr.id ? "selected" : ""}`}
+                        onClick={() => setSelectedAddressId(addr.id)}
+                      >
+                        <input
+                          type="radio"
+                          name="address"
+                          style={{ accentColor: "#ee4d2d", marginTop: 2, flexShrink: 0 }}
+                          checked={selectedAddressId === addr.id}
+                          onChange={() => setSelectedAddressId(addr.id)}
+                        />
+                        <div>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>{addr.name} · {addr.phone}</div>
+                          <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{addr.address}{addr.city ? `, ${addr.city}` : ""}</div>
+                          {addr.is_default === 1 && (
+                            <span style={{ display: "inline-block", marginTop: 4, fontSize: 11, fontWeight: 600, color: "#ee4d2d", background: "#fff7f5", border: "1px solid #fecaca", borderRadius: 20, padding: "2px 8px" }}>Mặc định</span>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                    <button className="od-btn-ghost" onClick={() => setEditingAddress(false)}>Hủy</button>
+                    <button
+                      className="od-btn-primary"
+                      style={{ flex: 1, padding: "10px" }}
+                      onClick={handleSaveAddress}
+                      disabled={savingAddress || !selectedAddressId}
+                    >
+                      {savingAddress ? "Đang lưu..." : "Lưu địa chỉ"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          )}
+
+          {/* Products */}
           <motion.div
+            className="od-card od-card-body"
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.15 }}
-            className="rounded-3xl bg-white p-5 shadow-sm"
+            transition={{ delay: 0.18 }}
           >
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-bold uppercase tracking-widest text-gray-400">📍 Địa chỉ giao hàng</h2>
-              {/* Nút sửa — chỉ hiện khi placed (chưa xác nhận) */}
-              {canEditAddress && !editingAddress && (
-                <button
-                  onClick={openEditAddress}
-                  className="text-xs font-bold text-orange-500 hover:text-orange-700 transition-colors"
-                >
-                  ✏️ Sửa địa chỉ
-                </button>
+            <div className="od-section-title">🛍 Sản phẩm ({items.length})</div>
+            {items.map((item, i) => (
+              <motion.div
+                key={item.id}
+                className="od-product-row"
+                initial={{ opacity: 0, x: -6 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: 0.2 + i * 0.06 }}
+              >
+                <div className="od-product-img-wrap">
+                  {item.image ? (
+                    <img
+                      className="od-product-img"
+                      src={item.image.startsWith("http") ? item.image : `http://localhost:5000${item.image}`}
+                      alt={item.name}
+                    />
+                  ) : (
+                    <div className="od-product-img-placeholder">📦</div>
+                  )}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="od-product-name">{item.name}</div>
+                  <div className="od-product-qty-badge">
+                    <span>Số lượng:</span>
+                    <strong>x{item.quantity}</strong>
+                  </div>
+                </div>
+                <div className="od-product-price-col">
+                  <div className="od-product-price">{formatPrice(item.price * item.quantity)}</div>
+                  {item.quantity > 1 && (
+                    <div className="od-product-unit">({formatPrice(item.price)}/cái)</div>
+                  )}
+                </div>
+              </motion.div>
+            ))}
+          </motion.div>
+
+          {/* Payment */}
+          <motion.div
+            className="od-card od-card-body"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.22 }}
+          >
+            <div className="od-section-title">💳 Thanh toán</div>
+
+            <div className="od-pay-breakdown">
+              <div className="od-pay-row">
+                <span className="od-pay-label">Tạm tính</span>
+                <span className="od-pay-value">{formatPrice(subtotal)}</span>
+              </div>
+
+              {order.shipping_fee > 0 && (
+                <div className="od-pay-row">
+                  <span className="od-pay-label">🚚 Phí vận chuyển</span>
+                  <span className="od-pay-value">{formatPrice(order.shipping_fee)}</span>
+                </div>
+              )}
+
+              {order.discount_amount > 0 && (
+                <div className="od-pay-row">
+                  <span className="od-pay-label">🎟 Voucher {order.voucher_code ? `(${order.voucher_code})` : ""}</span>
+                  <span className="od-discount">−{formatPrice(order.discount_amount)}</span>
+                </div>
               )}
             </div>
 
-            {/* Chế độ xem */}
-            {!editingAddress && address && (
-              <div className="rounded-2xl bg-gray-50 px-4 py-3">
-                <p className="text-sm font-bold text-gray-800">{address.name}</p>
-                <p className="text-sm text-gray-500 mt-0.5">{address.phone}</p>
-                <p className="text-sm text-gray-500">{address.address}{address.city ? `, ${address.city}` : ""}</p>
+            <div className="od-pay-total-box">
+              <div className="od-pay-total">
+                <span className="od-total-label">Tổng cộng</span>
+                <span className="od-total-value">{formatPrice(order.total_price)}</span>
               </div>
-            )}
+            </div>
 
-            {/* Chế độ sửa — chọn từ danh sách địa chỉ */}
-            {editingAddress && (
-              <div className="space-y-3">
-                {addressList.length === 0 ? (
-                  <p className="text-sm text-gray-400 text-center py-4">Bạn chưa có địa chỉ nào. Hãy thêm địa chỉ trong hồ sơ.</p>
-                ) : (
-                  addressList.map((addr) => (
-                    <label
-                      key={addr.id}
-                      className={`flex items-start gap-3 rounded-2xl border-2 p-3 cursor-pointer transition-all ${
-                        selectedAddressId === addr.id
-                          ? "border-orange-400 bg-orange-50"
-                          : "border-gray-200 bg-gray-50 hover:border-gray-300"
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name="address"
-                        className="mt-0.5 accent-orange-500"
-                        checked={selectedAddressId === addr.id}
-                        onChange={() => setSelectedAddressId(addr.id)}
-                      />
-                      <div>
-                        <p className="text-sm font-bold text-gray-800">{addr.name}</p>
-                        <p className="text-xs text-gray-500">{addr.phone}</p>
-                        <p className="text-xs text-gray-500">{addr.address}{addr.city ? `, ${addr.city}` : ""}</p>
-                        {addr.is_default === 1 && (
-                          <span className="mt-1 inline-block rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-bold text-orange-600">Mặc định</span>
-                        )}
-                      </div>
-                    </label>
-                  ))
-                )}
+            <div className="od-pay-meta">
+              <div className="od-pay-row-meta">
+                <span className="od-pay-label">Phương thức</span>
+                <span className="od-pay-method">{order.payment_method?.toUpperCase()}</span>
+              </div>
 
-                <div className="flex gap-2 pt-1">
-                  <button
-                    onClick={() => setEditingAddress(false)}
-                    className="flex-1 rounded-xl border-2 border-gray-200 py-2 text-xs font-bold text-gray-600 hover:bg-gray-50 transition-colors"
-                  >
-                    Hủy
-                  </button>
-                  <button
-                    onClick={handleSaveAddress}
-                    disabled={savingAddress || !selectedAddressId}
-                    className="flex-1 rounded-xl bg-gradient-to-r from-orange-500 to-red-500 py-2 text-xs font-bold text-white shadow-md shadow-orange-200 hover:brightness-105 transition-all disabled:opacity-50"
-                  >
-                    {savingAddress ? "Đang lưu..." : "Lưu địa chỉ"}
-                  </button>
+              <div className="od-pay-row-meta">
+                <span className="od-pay-label">Trạng thái TT</span>
+                <span className={`od-badge ${(PAYMENT_CONFIG[order.payment_status] || {}).cls || "status-amber"}`}>
+                  {(PAYMENT_CONFIG[order.payment_status] || {}).text || order.payment_status}
+                </span>
+              </div>
+
+              {order.transaction_id && (
+                <div className="od-pay-row-meta">
+                  <span className="od-pay-label">Mã giao dịch</span>
+                  <span className="od-mono">{order.transaction_id}</span>
                 </div>
+              )}
+
+              {order.note && (
+                <div className="od-pay-row-meta">
+                  <span className="od-pay-label">Ghi chú</span>
+                  <span className="od-pay-value">{order.note}</span>
+                </div>
+              )}
+            </div>
+          </motion.div>
+
+        </div>
+      </div>
+
+      {/* Cancel Confirm Modal */}
+      <AnimatePresence>
+        {showConfirm && (
+          <motion.div
+            className="od-modal-bg"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setShowConfirm(false)}
+          >
+            <motion.div
+              className="od-modal"
+              initial={{ scale: 0.9, y: 16 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              transition={{ type: "spring", stiffness: 320, damping: 25 }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="od-modal-icon">🗑️</div>
+              <div className="od-modal-title">Hủy đơn hàng?</div>
+              <div className="od-modal-sub">
+                Đơn <strong>#{order.id}</strong> sẽ bị hủy vĩnh viễn và không thể hoàn tác.
               </div>
-            )}
+              <div className="od-modal-actions">
+                <button className="od-btn-ghost" onClick={() => setShowConfirm(false)}>Giữ lại</button>
+                <button className="od-btn-danger" onClick={handleCancel} disabled={cancelling}>
+                  {cancelling ? "Đang hủy..." : "Xác nhận hủy"}
+                </button>
+              </div>
+            </motion.div>
           </motion.div>
         )}
-
-        {/* Items */}
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className="rounded-3xl bg-white p-5 shadow-sm"
-        >
-          <h2 className="mb-4 text-sm font-bold uppercase tracking-widest text-gray-400">
-            🛍️ Sản phẩm ({items.length})
-          </h2>
-          <div className="space-y-3">
-            {items.map((item) => (
-              <div key={item.id} className="flex items-center gap-4 rounded-2xl bg-gray-50 p-3">
-                {item.image ? (
-                  <img src={item.image} alt={item.name} className="h-16 w-16 rounded-xl object-cover border border-gray-200 shrink-0" />
-                ) : (
-                  <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl bg-gray-200 text-2xl">📦</div>
-                )}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-gray-800 truncate">{item.name}</p>
-                  <p className="text-xs text-gray-400 mt-0.5">x{item.quantity}</p>
-                </div>
-                <p className="text-sm font-bold text-orange-600 shrink-0">
-                  {formatPrice(item.price * item.quantity)}
-                </p>
-              </div>
-            ))}
-          </div>
-        </motion.div>
-
-        {/* Payment details */}
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.25 }}
-          className="rounded-3xl bg-white p-5 shadow-sm"
-        >
-          <h2 className="mb-4 text-sm font-bold uppercase tracking-widest text-gray-400">💳 Thanh toán</h2>
-          <div className="space-y-0">
-            <InfoRow
-              label="Tạm tính"
-              value={formatPrice((order.total_price || 0) - (order.shipping_fee || 0) + (order.discount_amount || 0))}
-            />
-            {order.shipping_fee > 0 && (
-              <InfoRow label="Phí vận chuyển" value={formatPrice(order.shipping_fee)} />
-            )}
-            {order.discount_amount > 0 && (
-              <div className="flex items-center justify-between py-2.5 border-b border-gray-100">
-                <span className="text-sm text-green-600">
-                  Voucher {order.voucher_code ? `(${order.voucher_code})` : ""}
-                </span>
-                <span className="text-sm font-semibold text-green-600">-{formatPrice(order.discount_amount)}</span>
-              </div>
-            )}
-            <div className="flex items-center justify-between py-3 border-b border-gray-200">
-              <span className="text-base font-bold text-gray-800">Tổng cộng</span>
-              <span className="text-xl font-black text-orange-600">{formatPrice(order.total_price)}</span>
-            </div>
-            <InfoRow
-              label="Phương thức thanh toán"
-              value={<span className="uppercase font-bold">{order.payment_method}</span>}
-            />
-            <div className="flex items-center justify-between py-2.5">
-              <span className="text-sm text-gray-500">Trạng thái thanh toán</span>
-              <span className={`rounded-full px-3 py-1 text-xs font-bold ${PAYMENT_PILL[order.payment_status] || "bg-gray-50 text-gray-600"}`}>
-                {PAYMENT_LABEL[order.payment_status] || order.payment_status}
-              </span>
-            </div>
-            {order.transaction_id && (
-              <InfoRow label="Mã giao dịch" value={<span className="font-mono text-xs text-gray-500">{order.transaction_id}</span>} />
-            )}
-            {order.note && <InfoRow label="Ghi chú" value={order.note} />}
-          </div>
-        </motion.div>
-
-      </div>
-    </div>
-
-    {/* Modal xác nhận hủy đơn */}
-    {showConfirm && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowConfirm(false)} />
-        <motion.div
-          initial={{ opacity: 0, scale: 0.92, y: 8 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          transition={{ duration: 0.18 }}
-          className="relative w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl"
-        >
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-red-50 text-3xl">🗑️</div>
-          <h3 className="text-center text-lg font-black text-gray-800">Hủy đơn hàng?</h3>
-          <p className="mt-2 text-center text-sm text-gray-500">
-            Đơn <span className="font-semibold text-gray-700">#{order.id}</span> sẽ bị hủy và không thể hoàn tác.
-          </p>
-          <div className="mt-6 flex gap-3">
-            <button
-              onClick={() => setShowConfirm(false)}
-              className="flex-1 rounded-2xl border-2 border-gray-200 py-2.5 text-sm font-bold text-gray-600 hover:bg-gray-50 transition-colors"
-            >
-              Giữ lại
-            </button>
-            <button
-              onClick={handleCancel}
-              disabled={cancelling}
-              className="flex-1 rounded-2xl bg-gradient-to-r from-red-500 to-rose-500 py-2.5 text-sm font-bold text-white shadow-lg shadow-red-200 hover:brightness-105 transition-all disabled:opacity-50"
-            >
-              {cancelling ? "Đang hủy..." : "Xác nhận hủy"}
-            </button>
-          </div>
-        </motion.div>
-      </div>
-    )}
+      </AnimatePresence>
     </>
   );
 }
+
+/* ─── STYLES ──────────────────────────────────────────────────────────────── */
+const STYLES = `
+  @import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap');
+
+  .od-page {
+    min-height: 100vh;
+    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+    padding: 20px 16px 48px;
+    font-family: 'Be Vietnam Pro', sans-serif;
+  }
+  .od-inner {
+    max-width: 680px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  /* Skeleton */
+  .od-skeleton {
+    background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%);
+    background-size: 200% 100%;
+    animation: od-shimmer 1.5s infinite;
+  }
+  @keyframes od-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  /* Cards */
+  .od-card {
+    background: #fff;
+    border-radius: 20px;
+    border: 1px solid rgba(226,232,240,0.8);
+    box-shadow: 0 2px 12px rgba(15,23,42,0.06), 0 1px 3px rgba(15,23,42,0.04);
+    overflow: hidden;
+    transition: box-shadow 0.2s;
+  }
+  .od-card:hover {
+    box-shadow: 0 4px 20px rgba(15,23,42,0.09), 0 2px 6px rgba(15,23,42,0.06);
+  }
+  .od-card-body { padding: 22px 22px 18px; }
+  .od-card-header { }
+
+  .od-section-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #94a3b8;
+    margin-bottom: 16px;
+  }
+
+  /* Status badges */
+  .od-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 13px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+  .status-indigo  { background: #eef2ff; color: #4f46e5; }
+  .status-sky     { background: #f0f9ff; color: #0284c7; }
+  .status-amber   { background: #fffbeb; color: #d97706; }
+  .status-emerald { background: #ecfdf5; color: #059669; }
+  .status-red     { background: #fef2f2; color: #dc2626; }
+  .status-purple  { background: #faf5ff; color: #7c3aed; }
+
+  /* Header */
+  .od-header-content {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 20px 22px 16px;
+  }
+  .od-order-id {
+    font-size: 20px;
+    font-weight: 800;
+    color: #0f172a;
+    letter-spacing: -0.02em;
+    margin-bottom: 4px;
+  }
+  .od-order-date {
+    font-size: 12px;
+    color: #94a3b8;
+    font-weight: 500;
+  }
+
+  /* Action bar */
+  .od-actions {
+    display: flex;
+    gap: 8px;
+    padding: 12px 22px 18px;
+    flex-wrap: wrap;
+  }
+  .od-btn-outline {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 18px;
+    border-radius: 12px;
+    font-size: 13px;
+    font-weight: 700;
+    border: 1.5px solid #fca5a5;
+    color: #dc2626;
+    background: #fff;
+    cursor: pointer;
+    transition: all 0.18s;
+    font-family: inherit;
+  }
+  .od-btn-outline:hover { background: #fef2f2; border-color: #f87171; transform: translateY(-1px); }
+  .od-btn-outline:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+  .od-btn-primary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 20px;
+    border-radius: 12px;
+    font-size: 13px;
+    font-weight: 700;
+    background: linear-gradient(135deg, #ee4d2d 0%, #f97316 100%);
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    transition: all 0.18s;
+    box-shadow: 0 4px 12px rgba(238,77,45,0.3);
+    font-family: inherit;
+  }
+  .od-btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(238,77,45,0.4); }
+  .od-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+
+  .od-btn-ghost-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 18px;
+    border-radius: 12px;
+    font-size: 13px;
+    font-weight: 700;
+    border: 1.5px solid #e2e8f0;
+    color: #475569;
+    background: #fff;
+    cursor: pointer;
+    transition: all 0.18s;
+    font-family: inherit;
+  }
+  .od-btn-ghost-action:hover { background: #f8fafc; border-color: #cbd5e1; transform: translateY(-1px); }
+  .od-btn-ghost-action:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+  /* Progress Steps */
+  .od-steps {
+    display: flex;
+    align-items: flex-start;
+    position: relative;
+    padding: 8px 0 4px;
+  }
+  .od-step {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: relative;
+    gap: 0;
+  }
+  .od-step-line {
+    position: absolute;
+    top: 21px;
+    left: calc(50% + 22px);
+    right: calc(-50% + 22px);
+    height: 3px;
+    background: #e2e8f0;
+    border-radius: 4px;
+    z-index: 0;
+    overflow: hidden;
+  }
+  .od-step-line.active { background: #e2e8f0; }
+  .od-step-line-fill {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, #ee4d2d, #f97316);
+    border-radius: 4px;
+    animation: od-line-fill 0.6s ease-out forwards;
+  }
+  @keyframes od-line-fill {
+    from { width: 0; }
+    to { width: 100%; }
+  }
+  .od-step-dot {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    z-index: 1;
+    position: relative;
+    background: #f1f5f9;
+    border: 2.5px solid #e2e8f0;
+    transition: all 0.25s;
+  }
+  .od-step-dot.done {
+    border: none;
+  }
+  .od-step-dot.current {
+    transform: scale(1.15);
+  }
+  .od-step-pulse {
+    position: absolute;
+    inset: -6px;
+    border-radius: 50%;
+    border: 2px solid;
+    opacity: 0.4;
+    animation: od-pulse 2s infinite;
+  }
+  @keyframes od-pulse {
+    0%, 100% { transform: scale(1); opacity: 0.4; }
+    50% { transform: scale(1.2); opacity: 0; }
+  }
+  .od-step-label {
+    font-size: 11px;
+    margin-top: 8px;
+    text-align: center;
+    max-width: 68px;
+    line-height: 1.4;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+  }
+  .od-step-label.done { color: #475569; font-weight: 600; }
+  .od-step-label.pending { color: #cbd5e1; font-weight: 500; }
+  .od-step-now-badge {
+    display: inline-block;
+    font-size: 9px;
+    font-weight: 700;
+    background: linear-gradient(135deg, #ee4d2d, #f97316);
+    color: #fff;
+    padding: 2px 7px;
+    border-radius: 20px;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  /* Cancelled banner */
+  .od-cancelled-banner {
+    background: linear-gradient(135deg, #fef2f2, #fff5f5);
+    border: 1.5px solid #fecaca;
+    border-radius: 14px;
+    padding: 16px 18px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .od-cancelled-dot {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: #fee2e2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+    font-weight: 700;
+    color: #ef4444;
+  }
+
+  /* Address */
+  .od-address-box {
+    background: #f8fafc;
+    border: 1.5px solid #e2e8f0;
+    border-radius: 14px;
+    padding: 16px 18px;
+  }
+  .od-address-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: #0f172a;
+    margin-bottom: 4px;
+  }
+  .od-address-detail { font-size: 13px; color: #64748b; line-height: 1.6; }
+  .od-edit-btn {
+    font-size: 12px;
+    font-weight: 700;
+    color: #ee4d2d;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px 10px;
+    border-radius: 8px;
+    transition: background 0.15s;
+  }
+  .od-edit-btn:hover { background: #fff7f5; }
+
+  /* Address picker */
+  .od-addr-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 13px 15px;
+    border-radius: 12px;
+    border: 1.5px solid #e2e8f0;
+    cursor: pointer;
+    transition: all 0.15s;
+    margin-bottom: 8px;
+  }
+  .od-addr-option.selected { border-color: #ee4d2d; background: #fff7f5; }
+  .od-addr-option:hover:not(.selected) { border-color: #94a3b8; }
+
+  /* Product rows */
+  .od-product-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 0;
+    transition: background 0.15s;
+    border-radius: 12px;
+    margin: 0 -8px;
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .od-product-row:not(:last-child) { border-bottom: 1px solid #f1f5f9; }
+  .od-product-row:hover { background: #f8fafc; }
+  .od-product-img-wrap {
+    position: relative;
+    flex-shrink: 0;
+  }
+  .od-product-img {
+    width: 68px;
+    height: 68px;
+    border-radius: 14px;
+    object-fit: cover;
+    border: 1px solid #f1f5f9;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  }
+  .od-product-img-placeholder {
+    width: 68px;
+    height: 68px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #f1f5f9, #e2e8f0);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+  }
+  .od-product-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: #0f172a;
+    line-height: 1.4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    margin-bottom: 6px;
+  }
+  .od-product-qty-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: #64748b;
+    background: #f1f5f9;
+    padding: 3px 10px;
+    border-radius: 20px;
+  }
+  .od-product-qty-badge strong { color: #334155; }
+  .od-product-price-col { text-align: right; margin-left: auto; }
+  .od-product-price {
+    font-size: 15px;
+    font-weight: 800;
+    color: #ee4d2d;
+    white-space: nowrap;
+  }
+  .od-product-unit {
+    font-size: 11px;
+    color: #94a3b8;
+    margin-top: 2px;
+  }
+
+  /* Payment breakdown */
+  .od-pay-breakdown {
+    background: #f8fafc;
+    border-radius: 14px;
+    padding: 14px 16px;
+    margin-bottom: 2px;
+  }
+  .od-pay-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 7px 0;
+    font-size: 14px;
+  }
+  .od-pay-row:not(:last-child) { border-bottom: 1px solid #f1f5f9; }
+  .od-pay-label { color: #64748b; font-weight: 500; }
+  .od-pay-value { color: #334155; font-weight: 600; }
+  .od-discount { color: #10b981; font-weight: 700; }
+
+  /* Total box */
+  .od-pay-total-box {
+    background: linear-gradient(135deg, #fff7f5, #fff5f0);
+    border: 1.5px solid #fed7aa;
+    border-radius: 16px;
+    padding: 16px 20px;
+    margin: 14px 0;
+  }
+  .od-pay-total {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .od-total-label {
+    font-size: 16px;
+    font-weight: 700;
+    color: #0f172a;
+  }
+  .od-total-value {
+    font-size: 26px;
+    font-weight: 800;
+    color: #ee4d2d;
+    letter-spacing: -0.02em;
+  }
+
+  /* Payment meta */
+  .od-pay-meta { }
+  .od-pay-row-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    font-size: 14px;
+    border-bottom: 1px solid #f1f5f9;
+  }
+  .od-pay-row-meta:last-child { border-bottom: none; }
+  .od-pay-method {
+    font-weight: 800;
+    color: #0f172a;
+    font-size: 13px;
+    background: #f1f5f9;
+    padding: 4px 12px;
+    border-radius: 8px;
+    letter-spacing: 0.05em;
+  }
+  .od-mono {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 12px;
+    color: #64748b;
+    background: #f1f5f9;
+    padding: 3px 8px;
+    border-radius: 6px;
+  }
+
+  /* Modal */
+  .od-modal-bg {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    background: rgba(15,23,42,0.5);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .od-modal {
+    background: #fff;
+    border-radius: 24px;
+    padding: 32px 28px;
+    width: 100%;
+    max-width: 360px;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.2);
+  }
+  .od-modal-icon {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #fef2f2, #fee2e2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 26px;
+    margin: 0 auto 18px;
+  }
+  .od-modal-title { font-size: 18px; font-weight: 800; color: #0f172a; text-align: center; }
+  .od-modal-sub { font-size: 14px; color: #64748b; text-align: center; margin-top: 8px; line-height: 1.6; }
+  .od-modal-actions { display: flex; gap: 10px; margin-top: 24px; }
+  .od-btn-ghost {
+    flex: 1;
+    padding: 12px;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: 700;
+    background: #f1f5f9;
+    border: none;
+    color: #475569;
+    cursor: pointer;
+    transition: background 0.15s;
+    font-family: inherit;
+  }
+  .od-btn-ghost:hover { background: #e2e8f0; }
+  .od-btn-danger {
+    flex: 1;
+    padding: 12px;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: 700;
+    background: linear-gradient(135deg, #ef4444, #dc2626);
+    border: none;
+    color: #fff;
+    cursor: pointer;
+    transition: all 0.18s;
+    box-shadow: 0 4px 12px rgba(220,38,38,0.3);
+    font-family: inherit;
+  }
+  .od-btn-danger:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(220,38,38,0.4); }
+  .od-btn-danger:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+
+  /* Back button */
+  .od-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #64748b;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 6px 0;
+    margin-bottom: 2px;
+    font-family: inherit;
+    transition: color 0.15s;
+  }
+  .od-back:hover { color: #0f172a; }
+  .od-back-arrow {
+    font-size: 16px;
+    transition: transform 0.15s;
+  }
+  .od-back:hover .od-back-arrow { transform: translateX(-3px); }
+
+  /* Responsive */
+  @media (max-width: 480px) {
+    .od-page { padding: 14px 12px 40px; }
+    .od-card-body { padding: 18px 16px 14px; }
+    .od-header-content { padding: 16px 18px 14px; }
+    .od-actions { padding: 10px 18px 16px; }
+    .od-order-id { font-size: 18px; }
+    .od-total-value { font-size: 22px; }
+    .od-step-dot { width: 38px; height: 38px; font-size: 15px; }
+    .od-btn-primary, .od-btn-outline, .od-btn-ghost-action { padding: 9px 14px; font-size: 12px; }
+  }
+`;

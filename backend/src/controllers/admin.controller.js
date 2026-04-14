@@ -9,7 +9,9 @@ async function stats(_req, res) {
       query("SELECT COUNT(*) total FROM users"),
       query("SELECT COUNT(*) total FROM orders"),
       query("SELECT COUNT(*) total FROM products"),
-      query("SELECT IFNULL(SUM(total_price),0) total FROM orders WHERE payment_status = 'paid'"),
+      query(`SELECT IFNULL(SUM(total_price),0) total FROM orders
+             WHERE payment_status = 'paid'
+                OR (payment_method = 'COD' AND status = 'delivered')`),
       query(`
         SELECT p.id, p.name, IFNULL(SUM(oi.quantity), 0) sold
         FROM products p
@@ -22,7 +24,7 @@ async function stats(_req, res) {
         SELECT DATE_FORMAT(created_at, '%Y-%m-%d') AS label,
                IFNULL(SUM(total_price), 0) AS value
         FROM orders
-        WHERE payment_status = 'paid'
+        WHERE (payment_status = 'paid' OR (payment_method = 'COD' AND status = 'delivered'))
           AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
         GROUP BY label
         ORDER BY label ASC`),
@@ -57,7 +59,7 @@ async function revenue(req, res) {
             IFNULL(SUM(total_price), 0) AS value,
             COUNT(*) AS count
      FROM orders
-     WHERE payment_status = 'paid'
+     WHERE (payment_status = 'paid' OR (payment_method = 'COD' AND status = 'delivered'))
        AND created_at >= DATE_SUB(NOW(), ${interval})
      GROUP BY label
      ORDER BY label ASC`
@@ -249,10 +251,24 @@ async function updateOrderStatus(req, res, next) {
   const allowed = ["placed", "confirmed", "shipping", "delivered", "cancelled"];
   if (!allowed.includes(status)) return next(new AppError("Trạng thái không hợp lệ", 400));
 
-  const existing = await query("SELECT id, user_id, status FROM orders WHERE id = ?", [req.params.id]);
+  const existing = await query(
+    "SELECT id, user_id, status, payment_method, payment_status FROM orders WHERE id = ?",
+    [req.params.id]
+  );
   if (!existing.length) return next(new AppError("Đơn hàng không tồn tại", 404));
 
-  await execute("UPDATE orders SET status = ? WHERE id = ?", [status, req.params.id]);
+  const order = existing[0];
+
+  // Tự động cập nhật payment_status cho đơn COD
+  let paymentUpdate = "";
+  const isCOD = (order.payment_method || "").toLowerCase() === "cod";
+  if (status === "delivered" && isCOD && order.payment_status !== "paid") {
+    paymentUpdate = ", payment_status = 'paid'";
+  } else if (status === "cancelled" && order.payment_status !== "paid") {
+    paymentUpdate = ", payment_status = 'failed'";
+  }
+
+  await execute(`UPDATE orders SET status = ?${paymentUpdate} WHERE id = ?`, [status, req.params.id]);
 
   // Notify user
   const msgMap = {
@@ -264,7 +280,7 @@ async function updateOrderStatus(req, res, next) {
   if (msgMap[status]) {
     await execute(
       "INSERT INTO notifications(user_id, title, message) VALUES(?, ?, ?)",
-      [existing[0].user_id, "Cập nhật đơn hàng", msgMap[status]]
+      [order.user_id, "Cập nhật đơn hàng", msgMap[status]]
     );
   }
 

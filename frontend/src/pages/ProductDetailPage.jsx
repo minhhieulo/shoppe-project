@@ -17,6 +17,12 @@ const StarRating = ({ rating, max = 5 }) => (
 );
 
 function ReviewCard({ review }) {
+  const imgSrc = review.image
+    ? review.image.startsWith("http")
+      ? review.image
+      : `http://localhost:5000${review.image}`
+    : null;
+
   return (
     <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
       <div className="flex items-start justify-between gap-2">
@@ -31,8 +37,13 @@ function ReviewCard({ review }) {
         </div>
       </div>
       <p className="mt-2 text-sm text-gray-600 leading-relaxed">{review.comment}</p>
-      {review.image && (
-        <img src={review.image} alt="review" className="mt-3 h-20 w-20 rounded-xl object-cover border border-gray-200" />
+      {imgSrc && (
+        <img
+          src={imgSrc}
+          alt="review"
+          className="mt-3 h-20 w-20 rounded-xl object-cover border border-gray-200"
+          onError={(e) => { e.target.style.display = "none"; }}
+        />
       )}
     </div>
   );
@@ -45,7 +56,6 @@ export default function ProductDetailPage() {
   const [qty, setQty] = useState(1);
   const [reviews, setReviews] = useState([]);
   const [activeImage, setActiveImage] = useState("");
-  const [reviewForm, setReviewForm] = useState({ rating: 5, comment: "", image: null });
   const [activeTab, setActiveTab] = useState("desc");
   const [wishlist, setWishlist] = useState(false);
 
@@ -58,7 +68,8 @@ export default function ProductDetailPage() {
     window.scrollTo({ top: 0 });
     api.get(`/products/${id}`).then((res) => {
       setData(res.data);
-      setActiveImage(res.data.images?.[0]?.image_url || "");
+      const firstImg = res.data.images?.[0]?.image_url || "";
+        setActiveImage(firstImg ? (firstImg.startsWith("http") ? firstImg : `http://localhost:5000${firstImg}`) : "");
     });
     api.get(`/reviews/${id}`).then((res) => setReviews(res.data));
     if (isLoggedIn) {
@@ -66,45 +77,47 @@ export default function ProductDetailPage() {
     }
   }, [id, isLoggedIn]);
 
-  const submitReview = async () => {
-    try {
-      const form = new FormData();
-      form.append("product_id", String(id));
-      form.append("rating", String(reviewForm.rating));
-      form.append("comment", reviewForm.comment);
-      if (reviewForm.image) form.append("image", reviewForm.image);
-      await api.post("/reviews", form, { headers: { "Content-Type": "multipart/form-data" } });
-      const { data: latest } = await api.get(`/reviews/${id}`);
-      setReviews(latest);
-      setReviewForm({ rating: 5, comment: "", image: null });
-      notify("✅ Gửi review thành công");
-    } catch {
-      notify("Chỉ user đã mua mới review được", "error");
-    }
-  };
+  const isOutOfStock = data ? data.stock === 0 : false;
 
   const addToCart = async (e) => {
-    if (!isLoggedIn) { notify("Cần đăng nhập để thêm giỏ hàng", "error"); return; }
+    if (!isLoggedIn) { notify("Vui lòng đăng nhập để thêm vào giỏ hàng", "error"); return; }
+    if (isOutOfStock) { notify("Sản phẩm hiện đã hết hàng", "error"); return; }
     try {
       await api.post("/cart/add", { product_id: Number(id), quantity: qty });
       const rect = e.currentTarget.getBoundingClientRect();
       triggerFlyToCart({ x: rect.left, y: rect.top });
       increaseCartCount();
       notify("✅ Đã thêm vào giỏ hàng");
-    } catch {
-      notify("Thêm vào giỏ thất bại", "error");
+    } catch (err) {
+      const msg = err?.response?.data?.message || "";
+      if (msg.includes("stock") || msg.includes("tồn kho")) {
+        notify("⚠️ Số lượng vượt quá hàng tồn kho", "error");
+      } else {
+        notify("Không thể thêm vào giỏ hàng, vui lòng thử lại", "error");
+      }
     }
   };
 
   const buyNow = async () => {
-    if (!isLoggedIn) { notify("Cần đăng nhập để mua hàng", "error"); navigate("/login"); return; }
+    if (!isLoggedIn) { notify("Vui lòng đăng nhập để mua hàng", "error"); navigate("/login"); return; }
+    if (isOutOfStock) { notify("Sản phẩm hiện đã hết hàng", "error"); return; }
     try {
       await api.post("/cart/add", { product_id: Number(id), quantity: qty });
       increaseCartCount();
       navigate("/checkout");
-    } catch {
-      notify("Có lỗi xảy ra, thử lại", "error");
+    } catch (err) {
+      const msg = err?.response?.data?.message || "";
+      if (msg.includes("stock") || msg.includes("tồn kho")) {
+        notify("⚠️ Số lượng vượt quá hàng tồn kho", "error");
+      } else {
+        notify("Không thể đặt mua, vui lòng thử lại", "error");
+      }
     }
+  };
+
+  const preOrder = () => {
+    if (!isLoggedIn) { notify("Vui lòng đăng nhập để đặt trước", "error"); navigate("/login"); return; }
+    notify("🔔 Đã đăng ký đặt trước! Chúng tôi sẽ thông báo khi có hàng", "success");
   };
 
   const toggleWishlist = () => {
@@ -128,7 +141,8 @@ export default function ProductDetailPage() {
   );
 
   const salePrice = data.price - (data.price * data.discount) / 100;
-  const image = activeImage || data.images?.[0]?.image_url || "https://placehold.co/600x600?text=Product";
+  const rawImg = activeImage || data.images?.[0]?.image_url || "";
+  const image = rawImg ? (rawImg.startsWith("http") ? rawImg : `http://localhost:5000${rawImg}`) : "https://placehold.co/600x600?text=Product";
   const avgRating = Number(data.avg_rating || 0).toFixed(1);
 
   return (
@@ -174,14 +188,14 @@ export default function ProductDetailPage() {
               {data.images?.map((img) => (
                 <button
                   key={img.id}
-                  onClick={() => setActiveImage(img.image_url)}
+                  onClick={() => setActiveImage(img.image_url?.startsWith("http") ? img.image_url : `http://localhost:5000${img.image_url}`)}
                   className={`shrink-0 h-16 w-16 overflow-hidden rounded-xl border-2 transition-all ${
-                    activeImage === img.image_url
+                    activeImage === (img.image_url?.startsWith("http") ? img.image_url : `http://localhost:5000${img.image_url}`)
                       ? "border-orange-500 shadow-md shadow-orange-100"
                       : "border-transparent hover:border-gray-300"
                   }`}
                 >
-                  <img src={img.image_url} alt="thumb" className="h-full w-full object-cover" />
+                  <img src={img.image_url?.startsWith("http") ? img.image_url : `http://localhost:5000${img.image_url}`} alt="thumb" className="h-full w-full object-cover" />
                 </button>
               ))}
             </div>
@@ -201,7 +215,9 @@ export default function ProductDetailPage() {
                 <span className="text-gray-300">|</span>
                 <span className="text-gray-500">{data.review_count} đánh giá</span>
                 <span className="text-gray-300">|</span>
-                <span className="text-gray-500">{data.stock} trong kho</span>
+                <span className={`font-medium ${data.stock === 0 ? "text-red-500" : "text-gray-500"}`}>
+                  {data.stock === 0 ? "🚫 Hết hàng" : `${data.stock} trong kho`}
+                </span>
               </div>
 
               {/* Price */}
@@ -241,7 +257,8 @@ export default function ProductDetailPage() {
                   </span>
                   <button
                     onClick={() => setQty(qty + 1)}
-                    className="flex h-10 w-10 items-center justify-center text-lg text-gray-600 hover:bg-gray-100 transition-colors"
+                    disabled={isOutOfStock || qty >= data.stock}
+                    className="flex h-10 w-10 items-center justify-center text-lg text-gray-600 hover:bg-gray-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     +
                   </button>
@@ -249,18 +266,34 @@ export default function ProductDetailPage() {
               </div>
 
               <div className="flex gap-2">
-                <button
-                  onClick={addToCart}
-                  className="flex-1 rounded-2xl border-2 border-orange-500 px-4 py-3 text-sm font-bold text-orange-600 hover:bg-orange-50 transition-colors active:scale-[0.98]"
-                >
-                  🛒 Thêm vào giỏ
-                </button>
-                <button
-                  onClick={buyNow}
-                  className="flex-1 rounded-2xl bg-gradient-to-r from-orange-500 to-red-500 px-4 py-3 text-sm font-bold text-white shadow-lg shadow-orange-200 hover:brightness-105 transition-all active:scale-[0.98]"
-                >
-                  Mua ngay
-                </button>
+                {isOutOfStock ? (
+                  <>
+                    <div className="flex-1 rounded-2xl border-2 border-gray-200 bg-gray-50 px-4 py-3 text-center text-sm font-bold text-gray-400 cursor-not-allowed select-none">
+                      🚫 Hết hàng
+                    </div>
+                    <button
+                      onClick={preOrder}
+                      className="flex-1 rounded-2xl bg-gradient-to-r from-blue-500 to-indigo-500 px-4 py-3 text-sm font-bold text-white shadow-lg shadow-blue-200 hover:brightness-105 transition-all active:scale-[0.98]"
+                    >
+                      🔔 Đặt trước
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={addToCart}
+                      className="flex-1 rounded-2xl border-2 border-orange-500 px-4 py-3 text-sm font-bold text-orange-600 hover:bg-orange-50 transition-colors active:scale-[0.98]"
+                    >
+                      🛒 Thêm vào giỏ
+                    </button>
+                    <button
+                      onClick={buyNow}
+                      className="flex-1 rounded-2xl bg-gradient-to-r from-orange-500 to-red-500 px-4 py-3 text-sm font-bold text-white shadow-lg shadow-orange-200 hover:brightness-105 transition-all active:scale-[0.98]"
+                    >
+                      Mua ngay
+                    </button>
+                  </>
+                )}
                 <button
                   onClick={toggleWishlist}
                   className={`flex h-12 w-12 items-center justify-center rounded-2xl border-2 text-lg transition-all ${wishlist ? "border-red-300 bg-red-50 text-red-500" : "border-gray-200 text-gray-400 hover:border-red-300 hover:text-red-400"}`}
@@ -301,53 +334,13 @@ export default function ProductDetailPage() {
               </motion.div>
             ) : (
               <motion.div key="reviews" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-6">
-                {/* Write review */}
-                <div className="mb-6 rounded-2xl bg-orange-50/50 border border-orange-100 p-4">
-                  <h3 className="mb-3 text-sm font-bold text-gray-700">✍️ Viết đánh giá của bạn</h3>
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-3">
-                      <span className="text-xs text-gray-500">Số sao:</span>
-                      <div className="flex gap-1">
-                        {[5, 4, 3, 2, 1].map((s) => (
-                          <button
-                            key={s}
-                            onClick={() => setReviewForm((r) => ({ ...r, rating: s }))}
-                            className={`text-2xl transition-transform hover:scale-125 ${s <= reviewForm.rating ? "text-amber-400" : "text-gray-300"}`}
-                          >
-                            ★
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <textarea
-                      className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-100 resize-none transition-all"
-                      rows={3}
-                      placeholder="Chia sẻ cảm nhận về sản phẩm..."
-                      value={reviewForm.comment}
-                      onChange={(e) => setReviewForm((s) => ({ ...s, comment: e.target.value }))}
-                    />
-                    <div className="flex items-center gap-3">
-                      <label className="flex cursor-pointer items-center gap-2 rounded-xl border-2 border-dashed border-gray-200 px-4 py-2 text-sm text-gray-500 hover:border-orange-300 hover:text-orange-500 transition-colors">
-                        📷 Thêm ảnh
-                        <input type="file" accept="image/*" className="hidden" onChange={(e) => setReviewForm((s) => ({ ...s, image: e.target.files?.[0] || null }))} />
-                      </label>
-                      {reviewForm.image && <span className="text-xs text-green-600">✓ {reviewForm.image.name}</span>}
-                      <button
-                        onClick={submitReview}
-                        className="ml-auto rounded-xl bg-gradient-to-r from-orange-500 to-red-500 px-5 py-2 text-sm font-bold text-white shadow-md shadow-orange-200 hover:brightness-105 transition-all"
-                      >
-                        Gửi đánh giá
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
                 {/* Reviews list */}
                 <div className="space-y-3">
                   {reviews.length === 0 ? (
                     <div className="py-10 text-center text-gray-400">
                       <div className="text-4xl mb-2">💬</div>
                       <p className="text-sm">Chưa có đánh giá nào</p>
+                      <p className="text-xs mt-1 text-gray-300">Mua hàng và đánh giá qua trang đơn hàng của bạn</p>
                     </div>
                   ) : (
                     reviews.map((r) => <ReviewCard key={r.id} review={r} />)

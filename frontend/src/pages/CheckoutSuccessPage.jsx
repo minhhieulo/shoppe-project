@@ -28,26 +28,32 @@ export default function CheckoutSuccessPage() {
 
     setOrderId(realOrderId);
 
-    // resultCode === "0" nghĩa là thành công
-    if (String(resultCode) === "0") {
-      setStatus("success");
-      // Polling để chờ IPN cập nhật DB (IPN có thể đến sau redirect)
+    // Wrap async logic vào inner function — useEffect không được async trực tiếp
+    const confirm = async () => {
       if (realOrderId) {
-        let tries = 0;
-        const poll = setInterval(async () => {
-          tries++;
-          try {
-            const res = await api.get(`/payment/status/${realOrderId}`);
-            if (res.data?.payment_status === "paid") {
-              clearInterval(poll);
-            }
-          } catch {}
-          if (tries >= 5) clearInterval(poll);
-        }, 2000);
+        try {
+          const res = await api.post("/payment/momo/confirm", {
+            orderId: realOrderId,
+            resultCode,
+            extraData,
+            momoOrderId,
+          });
+          if (res.data?.payment_status === "paid") {
+            setStatus("success");
+          } else {
+            setStatus("failed");
+          }
+        } catch {
+          // Nếu confirm lỗi, fallback về resultCode từ MoMo
+          setStatus(String(resultCode) === "0" ? "success" : "failed");
+        }
+      } else {
+        // Không có orderId — dùng resultCode làm fallback
+        setStatus(String(resultCode) === "0" ? "success" : "failed");
       }
-    } else {
-      setStatus("failed");
-    }
+    };
+
+    confirm();
   }, []);
 
   if (status === "loading") {

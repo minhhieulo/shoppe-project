@@ -4,6 +4,7 @@ import Footer from "../components/Footer";
 import Toast from "../components/Toast";
 import MobileBottomNav from "../components/MobileBottomNav";
 import CartFlyEffect from "../components/CartFlyEffect";
+import ChatbotWidget from "../components/ChatbotWidget";
 
 export default function MainLayout() {
   return (
@@ -16,6 +17,7 @@ export default function MainLayout() {
       <CartFlyEffect />
       <MobileBottomNav />
       <Toast />
+      <ChatbotWidget />
     </>
   );
 }

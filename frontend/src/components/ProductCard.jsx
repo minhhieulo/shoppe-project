@@ -2,9 +2,19 @@ import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { formatPrice } from "../utils/format";
 
+const API_URL = import.meta.env.VITE_API_URL?.replace("/api", "") || "http://localhost:5000";
+const PLACEHOLDER = "https://placehold.co/400x400?text=No+Image";
+
+function getImageSrc(thumbnail) {
+  if (!thumbnail) return PLACEHOLDER;
+  if (thumbnail.startsWith("http")) return thumbnail;
+  return `${API_URL}${thumbnail}`;
+}
+
 export default function ProductCard({ product, onWishlist, onAddToCart }) {
   const navigate = useNavigate();
   const salePrice = product.price - (product.price * product.discount) / 100;
+
   return (
     <motion.div
       whileHover={{ y: -4, scale: 1.01 }}
@@ -14,15 +24,19 @@ export default function ProductCard({ product, onWishlist, onAddToCart }) {
     >
       <img
         loading="lazy"
-        src={product.thumbnail || product.image || "https://placehold.co/400x400?text=Product"}
+        src={getImageSrc(product.thumbnail)}
+        onError={(e) => {
+          e.target.onerror = null;
+          e.target.src = PLACEHOLDER;
+        }}
         alt={product.name}
-        className="h-40 w-full rounded object-cover"
+        className="h-40 w-full rounded object-cover bg-gray-100"
       />
       <p className="mt-2 line-clamp-2 block text-sm font-semibold">
         {product.name}
       </p>
       <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500">
-        <span>Da ban {product.total_sold || 0}</span>
+        <span>Đã bán {product.total_sold || 0}</span>
         <span className="rounded bg-orange-100 px-1 text-[#ee4d2d]">-{product.discount}%</span>
       </div>
       <div className="mt-2 flex items-center justify-between">

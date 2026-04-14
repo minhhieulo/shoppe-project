@@ -60,10 +60,13 @@ router.post(
     if (!partnerCode || !accessKey) throw new AppError("Thiếu MOMO_PARTNER_CODE hoặc MOMO_ACCESS_KEY", 500);
     if (!redirectUrl || !ipnUrl) throw new AppError("Thiếu MOMO_REDIRECT_URL hoặc MOMO_IPN_URL", 500);
 
-    const requestType = "payWithATM";
+    const requestType = "captureWallet";
     const requestId = `REQ-${orderId}-${Date.now()}`;
     const momoOrderId = `ORDER-${orderId}-${Date.now()}`;
-    const amount = String(Math.round(Number(order.total_price || 0)));
+    const amount = Math.round(Number(order.total_price || 0));
+
+    if (amount < 1000) throw new AppError("Số tiền thanh toán tối thiểu là 1.000đ", 400);
+
     const orderInfo = `Thanh toan don hang #${orderId}`;
     const extraData = Buffer.from(JSON.stringify({ orderId })).toString("base64");
 
@@ -80,6 +83,11 @@ router.post(
       `&requestType=${requestType}`;
 
     const signature = signMoMo(rawSignature);
+
+    console.log("=== MOMO CREATE ===");
+    console.log("IPN URL:", ipnUrl);
+    console.log("Amount:", amount);
+    console.log("momoOrderId:", momoOrderId);
 
     const payload = {
       partnerCode,
@@ -98,6 +106,8 @@ router.post(
     };
 
     const { data } = await axios.post(endpoint, payload, { timeout: 15000 });
+
+    console.log("=== MOMO RESPONSE ===", JSON.stringify(data, null, 2));
 
     if (Number(data?.resultCode) !== 0 || !data?.payUrl) {
       throw new AppError(data?.message || "Không tạo được thanh toán MoMo", 400);
@@ -118,6 +128,8 @@ router.post(
   asyncHandler(async (req, res, next) => {
     const body = req.body || {};
 
+    console.log("=== MOMO IPN RECEIVED ===", JSON.stringify(body, null, 2));
+
     const {
       partnerCode,
       orderId: momoOrderId,
@@ -135,6 +147,7 @@ router.post(
     } = body;
 
     if (!partnerCode || !momoOrderId || !requestId || typeof resultCode === "undefined" || !signature) {
+      console.log("=== IPN MISSING FIELDS ===", { partnerCode, momoOrderId, requestId, resultCode, signature });
       return next(new AppError("IPN thiếu dữ liệu", 400));
     }
 
@@ -157,7 +170,14 @@ router.post(
       `&transId=${transId ?? ""}`;
 
     const expected = signMoMo(rawSignature);
+
+    console.log("=== SIGNATURE CHECK ===");
+    console.log("Expected :", expected);
+    console.log("Received :", signature);
+    console.log("Match    :", expected === signature);
+
     if (String(expected) !== String(signature)) {
+      console.log("=== SIGNATURE MISMATCH - REJECTING IPN ===");
       return next(new AppError("Chữ ký MoMo không hợp lệ", 401));
     }
 
@@ -165,11 +185,15 @@ router.post(
     if (!match) return next(new AppError("orderId không hợp lệ", 400));
     const orderId = Number(match[1]);
 
+    console.log("=== UPDATING ORDER ===", { orderId, resultCode, status: Number(resultCode) === 0 ? "paid" : "failed" });
+
     const status = Number(resultCode) === 0 ? "paid" : "failed";
     await execute(
       "UPDATE orders SET payment_status = ?, transaction_id = ?, paid_at = CASE WHEN ? = 'paid' THEN NOW() ELSE paid_at END WHERE id = ?",
       [status, String(transId || requestId), status, orderId]
     );
+
+    console.log("=== ORDER UPDATED SUCCESSFULLY ===", { orderId, status });
 
     if (status === "paid") {
       const orders = await query("SELECT user_id FROM orders WHERE id = ?", [orderId]);
@@ -186,7 +210,6 @@ router.post(
 );
 
 // Webhook — called by payment provider after successful payment
-// Secured by a shared secret header
 router.post(
   "/webhook",
   asyncHandler(async (req, res, next) => {
@@ -206,7 +229,6 @@ router.post(
       [status, transactionId || `TXN-${Date.now()}`, orderId]
     );
 
-    // Notify user
     if (status === "paid") {
       const orders = await query("SELECT user_id FROM orders WHERE id = ?", [orderId]);
       if (orders.length) {
@@ -232,6 +254,55 @@ router.get(
     );
     if (!rows.length) return next(new AppError("Đơn hàng không tồn tại", 404));
     return res.json(rows[0]);
+  })
+);
+
+// Confirm MoMo payment from redirect (called by frontend after success redirect)
+// This is a fallback in case IPN hasn't arrived yet
+router.post(
+  "/momo/confirm",
+  auth(),
+  asyncHandler(async (req, res, next) => {
+    const { orderId, resultCode, extraData, momoOrderId } = req.body;
+
+    if (typeof resultCode === "undefined" || !orderId) {
+      return next(new AppError("Thiếu orderId hoặc resultCode", 400));
+    }
+
+    // Verify this order belongs to the requesting user
+    const orders = await query(
+      "SELECT id, user_id, payment_status, total_price FROM orders WHERE id = ?",
+      [orderId]
+    );
+    if (!orders.length) return next(new AppError("Đơn hàng không tồn tại", 404));
+    const order = orders[0];
+    if (order.user_id !== req.user.id) return next(new AppError("Không có quyền", 403));
+
+    // Already confirmed by IPN — just return current status
+    if (order.payment_status === "paid") {
+      return res.json({ payment_status: "paid", orderId });
+    }
+
+    // Only update if resultCode from MoMo indicates success
+    if (Number(resultCode) === 0) {
+      await execute(
+        "UPDATE orders SET payment_status = 'paid', paid_at = NOW() WHERE id = ? AND payment_status != 'paid'",
+        [orderId]
+      );
+      // Create notification
+      await execute(
+        "INSERT INTO notifications(user_id, title, message) VALUES(?,?,?)",
+        [order.user_id, "Thanh toán MoMo thành công", `Thanh toán đơn hàng #${orderId} đã được xác nhận`]
+      );
+      return res.json({ payment_status: "paid", orderId });
+    }
+
+    // resultCode != 0 means user cancelled or payment failed
+    await execute(
+      "UPDATE orders SET payment_status = 'failed' WHERE id = ? AND payment_status = 'pending'",
+      [orderId]
+    );
+    return res.json({ payment_status: "failed", orderId });
   })
 );
 

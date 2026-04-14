@@ -65,7 +65,7 @@ function AccountSidebar({ user }) {
 // Layout bọc ngoài
 function AccountLayout({ children, user }) {
   return (
-    <div className="min-h-screen bg-[#f5f5f5] py-6">
+    <div className="bg-[#f5f5f5] py-6">
       <div className="mx-auto flex max-w-6xl gap-5 px-4 md:flex-row flex-col">
         <AccountSidebar user={user} />
         <div className="flex-1 min-w-0">{children}</div>
@@ -129,12 +129,12 @@ export function CartPage() {
 
   const updateQty = async (item, next) => {
     if (next < 1) return;
-    await api.put("/cart/update", { item_id: item.id, quantity: next });
+    await api.put("/cart/update", { item_id: item.item_id, quantity: next });
     loadCart();
   };
 
   const removeItem = async (item) => {
-    await api.delete("/cart/remove", { data: { item_id: item.id } });
+    await api.delete("/cart/remove", { data: { item_id: item.item_id } });
     notify("Đã xoá sản phẩm");
     loadCart();
   };
@@ -167,10 +167,10 @@ export function CartPage() {
               {cart.map((item) => {
                 const salePrice = item.price - (item.price * item.discount) / 100;
                 return (
-                  <div key={item.id ?? `cart-${item.product_id}`}
+                  <div key={item.item_id ?? `cart-${item.product_id}`}
                     className="grid grid-cols-12 items-center gap-3 rounded-xl border border-gray-100 p-3 hover:border-orange-200 transition-colors">
                     <div className="col-span-5 flex items-center gap-3">
-                      <img src={item.image || "https://placehold.co/80x80"} alt={item.name}
+                      <img src={item.image ? (item.image.startsWith("http") ? item.image : `http://localhost:5000${item.image}`) : "https://placehold.co/80x80"} alt={item.name}
                         className="h-16 w-16 rounded-lg object-cover border border-gray-100" />
                       <div>
                         <p className="text-sm font-medium text-gray-800 line-clamp-2">{item.name}</p>
@@ -238,7 +238,7 @@ export function WishlistPage() {
             {items.map((i) => (
               <Link key={i.id} to={`/products/${i.product_id || i.id}`}
                 className="group rounded-xl border border-gray-100 p-3 hover:border-orange-300 hover:shadow-md transition-all">
-                <img src={i.image || i.thumbnail || "https://placehold.co/200x200"} alt={i.name}
+                <img src={(() => { const u = i.thumbnail || i.image; return u ? (u.startsWith("http") ? u : `http://localhost:5000${u}`) : "https://placehold.co/200x200"; })()} alt={i.name}
                   className="mb-2 h-32 w-full rounded-lg object-cover group-hover:scale-105 transition-transform" />
                 <p className="text-sm font-medium text-gray-800 line-clamp-2">{i.name}</p>
                 {i.price && <p className="mt-1 text-sm font-bold text-brand">{Number(i.price).toLocaleString()}đ</p>}
@@ -446,7 +446,7 @@ export function CheckoutPage() {
                     const sp = item.price - (item.price * item.discount) / 100;
                     return (
                       <div key={item.id ?? item.product_id} className="flex gap-2">
-                        <img src={item.image || "https://placehold.co/48x48"} alt={item.name}
+                        <img src={item.image ? (item.image.startsWith("http") ? item.image : `http://localhost:5000${item.image}`) : "https://placehold.co/48x48"} alt={item.name}
                           className="h-12 w-12 rounded-lg object-cover shrink-0" />
                         <div className="flex-1 min-w-0">
                           <p className="truncate text-xs font-medium text-gray-700">{item.name}</p>
@@ -493,16 +493,177 @@ export function CheckoutPage() {
   );
 }
 
+// ─── ReviewModal ─────────────────────────────────────────────────────────────
+function ReviewModal({ order, onClose, onDone }) {
+  const notify = useStore((s) => s.notify);
+  const [items, setItems] = useState([]);
+  // reviewedIds: set of product_id đã review xong trong session này
+  const [reviewedIds, setReviewedIds] = useState(new Set());
+  const [forms, setForms] = useState({}); // { [product_id]: { rating, comment, image } }
+  const [submitting, setSubmitting] = useState(null); // product_id đang submit
+
+  // Lấy danh sách sản phẩm trong đơn
+  useEffect(() => {
+    api.get(`/orders/${order.id}`)
+      .then((res) => {
+        const detail = res.data;
+        const products = detail.items ?? detail.products ?? detail.order_items ?? [];
+        setItems(products);
+        // Init form cho từng sản phẩm
+        const init = {};
+        products.forEach((p) => {
+          const pid = p.product_id ?? p.id;
+          init[pid] = { rating: 5, comment: "", image: null };
+        });
+        setForms(init);
+      })
+      .catch(() => notify("Không thể tải sản phẩm", "error"));
+  }, [order.id]);
+
+  const setForm = (pid, field, value) =>
+    setForms((prev) => ({ ...prev, [pid]: { ...prev[pid], [field]: value } }));
+
+  const submitOne = async (pid) => {
+    const f = forms[pid];
+    if (!f?.comment?.trim()) { notify("Vui lòng nhập nhận xét", "error"); return; }
+    setSubmitting(pid);
+    try {
+      const form = new FormData();
+      form.append("product_id", String(pid));
+      form.append("rating", String(f.rating));
+      form.append("comment", f.comment);
+      if (f.image) form.append("image", f.image);
+      await api.post("/reviews", form, { headers: { "Content-Type": "multipart/form-data" } });
+      setReviewedIds((prev) => new Set([...prev, pid]));
+      notify("Đánh giá thành công ⭐");
+    } catch (err) {
+      notify(err.response?.data?.message || "Gửi thất bại", "error");
+    } finally {
+      setSubmitting(null);
+    }
+  };
+
+  const allDone = items.length > 0 && items.every((p) => reviewedIds.has(p.product_id ?? p.id));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+      <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between border-b px-6 py-4 shrink-0">
+          <div>
+            <h2 className="font-bold text-gray-800">⭐ Đánh giá đơn hàng #{order.id}</h2>
+            <p className="text-xs text-gray-400 mt-0.5">Chia sẻ trải nghiệm của bạn về sản phẩm</p>
+          </div>
+          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors">✕</button>
+        </div>
+
+        {/* Body */}
+        <div className="overflow-y-auto flex-1 px-6 py-5 space-y-5">
+          {items.length === 0 ? (
+            <div className="flex items-center justify-center py-10">
+              <div className="h-6 w-6 animate-spin rounded-full border-4 border-brand border-t-transparent" />
+            </div>
+          ) : items.map((p) => {
+            const pid = p.product_id ?? p.id;
+            const f = forms[pid] || { rating: 5, comment: "", image: null };
+            const done = reviewedIds.has(pid);
+            const imgSrc = p.image || p.thumbnail;
+            const imgUrl = imgSrc ? (imgSrc.startsWith("http") ? imgSrc : `http://localhost:5000${imgSrc}`) : "https://placehold.co/56x56";
+
+            return (
+              <div key={pid} className={`rounded-xl border p-4 transition-all ${done ? "border-green-200 bg-green-50" : "border-gray-200"}`}>
+                {/* Product info */}
+                <div className="flex items-center gap-3 mb-4">
+                  <img src={imgUrl} alt={p.name} className="h-14 w-14 rounded-lg object-cover border border-gray-100 shrink-0" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-gray-800 line-clamp-2">{p.name || p.product_name}</p>
+                    {done && <p className="mt-1 text-xs text-green-600 font-medium">✓ Đã đánh giá</p>}
+                  </div>
+                </div>
+
+                {done ? (
+                  <div className="flex items-center gap-1">
+                    {Array.from({ length: 5 }, (_, i) => (
+                      <svg key={i} className={`h-5 w-5 ${i < (forms[pid]?.rating || 5) ? "text-amber-400" : "text-gray-200"}`} fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                      </svg>
+                    ))}
+                    <span className="ml-1 text-xs text-gray-500">"{forms[pid]?.comment}"</span>
+                  </div>
+                ) : (
+                  <>
+                    {/* Star picker */}
+                    <div className="mb-3">
+                      <p className="mb-1.5 text-xs font-medium text-gray-500 uppercase tracking-wide">Số sao</p>
+                      <div className="flex items-center gap-1">
+                        {[1, 2, 3, 4, 5].map((star) => (
+                          <button key={star} onClick={() => setForm(pid, "rating", star)}
+                            className="transition-transform hover:scale-110">
+                            <svg className={`h-7 w-7 ${star <= f.rating ? "text-amber-400" : "text-gray-200"}`} fill="currentColor" viewBox="0 0 20 20">
+                              <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                            </svg>
+                          </button>
+                        ))}
+                        <span className="ml-2 text-sm font-semibold text-amber-500">{f.rating}/5</span>
+                      </div>
+                    </div>
+
+                    {/* Comment */}
+                    <textarea
+                      rows={3}
+                      className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-orange-100 transition-all resize-none"
+                      placeholder="Chia sẻ cảm nhận của bạn về sản phẩm..."
+                      value={f.comment}
+                      onChange={(e) => setForm(pid, "comment", e.target.value)}
+                    />
+
+                    {/* Image + Submit row */}
+                    <div className="mt-3 flex items-center justify-between gap-3">
+                      <label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-dashed border-gray-300 px-3 py-1.5 text-xs text-gray-500 hover:border-brand hover:text-brand transition-colors">
+                        🖼️ {f.image ? f.image.name : "Thêm ảnh"}
+                        <input type="file" accept="image/*" className="hidden"
+                          onChange={(e) => setForm(pid, "image", e.target.files?.[0] || null)} />
+                      </label>
+                      <Btn onClick={() => submitOne(pid)} disabled={submitting === pid} className="shrink-0 px-4 py-2 text-xs">
+                        {submitting === pid ? "Đang gửi..." : "Gửi đánh giá"}
+                      </Btn>
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Footer */}
+        <div className="border-t px-6 py-4 shrink-0">
+          {allDone ? (
+            <Btn onClick={() => { onDone(); onClose(); }} className="w-full py-3">
+              ✓ Hoàn tất đánh giá
+            </Btn>
+          ) : (
+            <button onClick={onClose} className="w-full rounded-xl border border-gray-200 py-2.5 text-sm text-gray-500 hover:bg-gray-50 transition-colors">
+              Để sau
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── OrderHistoryPage ─────────────────────────────────────────────────────────
 export function OrderHistoryPage() {
   const [orders, setOrders] = useState([]);
   const [tab, setTab] = useState("all");
+  const [reviewOrder, setReviewOrder] = useState(null); // order đang mở modal
   const user = useStore((s) => s.user);
   const { key } = useLocation(); // key thay đổi mỗi khi navigate tới trang này
 
-  useEffect(() => {
+  const loadOrders = () =>
     api.get("/orders/my").then((res) => setOrders(Array.isArray(res.data) ? res.data : []));
-  }, [key]); // re-fetch mỗi khi quay lại trang
+
+  useEffect(() => { loadOrders(); }, [key]); // re-fetch mỗi khi quay lại trang
 
   const STATUS = {
     placed:    { label: "Đã đặt",      color: "bg-blue-100 text-blue-600",    icon: "📋" },
@@ -548,34 +709,71 @@ export function OrderHistoryPage() {
         <div className="space-y-3">
           {filtered.map((o) => {
             const s = STATUS[o.status] || STATUS.placed;
+            const canReview = o.status === "delivered" && !o.is_reviewed;
             return (
-              <Link key={o.id} to={`/orders/${o.id}`}
-                className="block rounded-xl bg-white shadow-sm hover:shadow-md transition-shadow overflow-hidden">
-                <div className="flex items-center justify-between border-b border-dashed px-5 py-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-gray-400 text-sm">#{o.id}</span>
-                    <span className="text-gray-300">·</span>
-                    <span className="text-xs text-gray-400">
-                      {o.created_at ? new Date(o.created_at).toLocaleDateString("vi-VN") : ""}
+              <div key={o.id} className="rounded-xl bg-white shadow-sm hover:shadow-md transition-shadow overflow-hidden">
+                {/* Header row — click vào đây để xem chi tiết */}
+                <Link to={`/orders/${o.id}`} className="block">
+                  <div className="flex items-center justify-between border-b border-dashed px-5 py-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-gray-400 text-sm">#{o.id}</span>
+                      <span className="text-gray-300">·</span>
+                      <span className="text-xs text-gray-400">
+                        {o.created_at ? new Date(o.created_at).toLocaleDateString("vi-VN") : ""}
+                      </span>
+                    </div>
+                    <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium ${s.color}`}>
+                      {s.icon} {s.label}
                     </span>
                   </div>
-                  <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium ${s.color}`}>
-                    {s.icon} {s.label}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between px-5 py-4">
+                </Link>
+
+                {/* Body row */}
+                <div className="flex items-center justify-between px-5 py-4 gap-3">
                   <div>
-                    <p className="text-sm text-gray-500">Phương thức: <span className="font-medium text-gray-700">{o.payment_method || "—"}</span></p>
+                    <p className="text-sm text-gray-500">
+                      Phương thức: <span className="font-medium text-gray-700">{o.payment_method || "—"}</span>
+                    </p>
                   </div>
-                  <div className="text-right">
-                    <p className="text-xs text-gray-400">Tổng cộng</p>
-                    <p className="text-lg font-bold text-brand">{Number(o.total_price).toLocaleString()}đ</p>
+                  <div className="flex items-center gap-3">
+                    <div className="text-right">
+                      <p className="text-xs text-gray-400">Tổng cộng</p>
+                      <p className="text-lg font-bold text-brand">{Number(o.total_price).toLocaleString()}đ</p>
+                    </div>
+                    {/* Nút đánh giá — chỉ hiện khi đã nhận hàng và chưa đánh giá */}
+                    {canReview && (
+                      <button
+                        onClick={() => setReviewOrder(o)}
+                        className="shrink-0 inline-flex items-center gap-1.5 rounded-xl bg-amber-400 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-amber-500 active:scale-95 transition-all"
+                      >
+                        ⭐ Đánh giá
+                      </button>
+                    )}
+                    {o.status === "delivered" && o.is_reviewed && (
+                      <span className="shrink-0 inline-flex items-center gap-1 rounded-xl bg-green-100 px-3 py-2 text-xs font-medium text-green-600">
+                        ✓ Đã đánh giá
+                      </span>
+                    )}
                   </div>
                 </div>
-              </Link>
+              </div>
             );
           })}
         </div>
+      )}
+
+      {/* Review Modal */}
+      {reviewOrder && (
+        <ReviewModal
+          order={reviewOrder}
+          onClose={() => setReviewOrder(null)}
+          onDone={() => {
+            // Đánh dấu đơn đã review trong local state (không cần refetch)
+            setOrders((prev) =>
+              prev.map((o) => o.id === reviewOrder.id ? { ...o, is_reviewed: true } : o)
+            );
+          }}
+        />
       )}
     </AccountLayout>
   );
@@ -870,40 +1068,99 @@ export function AdminDashboardPage() {
 // ─── ChatPage ─────────────────────────────────────────────────────────────────
 export function ChatPage() {
   const user = useStore((s) => s.user);
+  const notify = useStore((s) => s.notify);
   const [socket, setSocket] = useState(null);
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
   const bottomRef = useRef(null);
+  const containerRef = useRef(null); // ref cho messages container
+  // Dùng ref để tránh race condition với socket
+  const messagesRef = useRef([]);
+  const isFirstLoad = useRef(true); // chặn scroll khi load lần đầu
 
+  const setMsgs = (data) => {
+    const arr = Array.isArray(data) ? data : [];
+    messagesRef.current = arr;
+    setMessages(arr);
+  };
+
+  // Load lịch sử chat
   useEffect(() => {
     api.get("/chat/my-thread")
-      .then((res) => setMessages(Array.isArray(res.data) ? res.data : []))
+      .then((res) => setMsgs(res.data))
       .catch(() => {});
   }, []);
 
+  // Kết nối socket
   useEffect(() => {
+    if (!user?.id) return;
     const s = io(import.meta.env.VITE_SOCKET_URL || "http://localhost:5000");
     setSocket(s);
-    if (user?.id) s.emit("join_user_room", user.id);
-    s.on("chat:new", (msg) => setMessages((prev) => [...prev, msg]));
+    s.emit("join_user_room", user.id);
+
+    s.on("chat:new", (msg) => {
+      // Chỉ append nếu tin này chưa có trong danh sách (tránh duplicate)
+      setMessages((prev) => {
+        const exists = prev.some(
+          (m) => (m.id && m.id === msg.id) ||
+                 (String(m.id).startsWith("tmp-") && m.message === msg.message && m.sender_id === msg.sender_id)
+        );
+        if (exists) {
+          // Thay thế tin optimistic bằng tin thật từ server
+          return prev.map((m) =>
+            String(m.id).startsWith("tmp-") && m.message === msg.message ? msg : m
+          );
+        }
+        return [...prev, msg];
+      });
+    });
+
     return () => s.disconnect();
-  }, [user]);
+  }, [user?.id]);
 
   useEffect(() => {
+    if (isFirstLoad.current) {
+      isFirstLoad.current = false;
+      // Khi load lịch sử lần đầu: scroll container lên TOP, không xuống cuối
+      if (containerRef.current) {
+        containerRef.current.scrollTop = 0;
+      }
+      return;
+    }
+    // Chỉ scroll xuống cuối khi có tin mới (gửi/nhận)
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   const send = async () => {
-    if (!text.trim()) return;
-    const optimistic = { id: `tmp-${Date.now()}`, sender_id: user?.id, message: text, created_at: new Date().toISOString() };
-    setMessages(prev => [...prev, optimistic]);
+    const trimmed = text.trim();
+    if (!trimmed || sending) return;
+
+    // Tạo tin optimistic để hiển thị ngay
+    const tmpId = `tmp-${Date.now()}`;
+    const optimistic = {
+      id: tmpId,
+      sender_id: user?.id,
+      message: trimmed,
+      created_at: new Date().toISOString(),
+    };
+
+    setMessages((prev) => [...prev, optimistic]);
     setText("");
+    setSending(true);
+
     try {
-      await api.post("/chat/user-send", { message: optimistic.message });
+      await api.post("/chat/user-send", { message: trimmed });
+      // Sau khi API thành công, fetch lại để đồng bộ id thật từ DB
+      // và thay thế tin optimistic
       const res = await api.get("/chat/my-thread");
-      setMessages(Array.isArray(res.data) ? res.data : []);
-    } catch {
-      if (socket) socket.emit("chat:send", { sender_id: user?.id, receiver_id: 1, message: optimistic.message });
+      setMsgs(res.data);
+    } catch (err) {
+      // Nếu lỗi: xóa tin optimistic và thông báo
+      setMessages((prev) => prev.filter((m) => m.id !== tmpId));
+      notify(err?.response?.data?.message || "Gửi tin nhắn thất bại", "error");
+    } finally {
+      setSending(false);
     }
   };
 
@@ -924,7 +1181,7 @@ export function ChatPage() {
         </div>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+        <div ref={containerRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
           {messages.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center text-gray-400">
               <div className="mb-3 text-5xl">💬</div>
@@ -932,22 +1189,26 @@ export function ChatPage() {
             </div>
           ) : (
             messages.map((m, idx) => {
-              const isMine = m.sender_id === user?.id;
+              // So sánh cả string lẫn number để chắc chắn
+              const isMine = Number(m.sender_id) === Number(user?.id);
+              const isOptimistic = String(m.id).startsWith("tmp-");
               return (
                 <div key={m.id ?? `msg-${idx}`} className={`flex ${isMine ? "justify-end" : "justify-start"}`}>
                   {!isMine && (
                     <div className="mr-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-orange-100 text-sm">🏪</div>
                   )}
-                  <div className={`max-w-[70%] rounded-2xl px-4 py-2.5 text-sm shadow-sm
+                  <div className={`max-w-[70%] rounded-2xl px-4 py-2.5 text-sm shadow-sm transition-opacity
+                    ${isOptimistic ? "opacity-60" : "opacity-100"}
                     ${isMine
                       ? "rounded-br-sm bg-brand text-white"
                       : "rounded-bl-sm bg-gray-100 text-gray-800"}`}>
                     <p>{m.message}</p>
-                    {m.created_at && (
-                      <p className={`mt-1 text-right text-[10px] ${isMine ? "text-orange-200" : "text-gray-400"}`}>
-                        {new Date(m.created_at).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })}
-                      </p>
-                    )}
+                    <p className={`mt-1 text-right text-[10px] ${isMine ? "text-orange-200" : "text-gray-400"}`}>
+                      {m.created_at
+                        ? new Date(m.created_at).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })
+                        : "..."}
+                      {isOptimistic && " ·  đang gửi"}
+                    </p>
                   </div>
                 </div>
               );
@@ -965,12 +1226,23 @@ export function ChatPage() {
               onChange={(e) => setText(e.target.value)}
               onKeyDown={handleKey}
               placeholder="Nhập tin nhắn... (Enter để gửi)"
+              disabled={sending}
             />
-            <button onClick={send} disabled={!text.trim()}
-              className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand text-white transition-all hover:bg-orange-600 disabled:opacity-40 active:scale-95">
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-              </svg>
+            <button
+              onClick={send}
+              disabled={!text.trim() || sending}
+              className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand text-white transition-all hover:bg-orange-600 disabled:opacity-40 active:scale-95"
+            >
+              {sending ? (
+                <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                </svg>
+              ) : (
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                </svg>
+              )}
             </button>
           </div>
         </div>

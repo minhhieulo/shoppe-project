@@ -66,7 +66,7 @@ export default function Navbar() {
 
   const dropdownItems =
     q.length === 0
-      ? searchHistory.slice(0, 6).map((item, i) => ({ id: `hist-${i}`, name: item, isHistory: true }))
+      ? []
       : suggestions.map((s, i) => ({ id: s.id != null ? `sug-${s.id}` : `sug-${i}`, name: s.name }));
 
   const handleLogout = () => {
@@ -259,18 +259,7 @@ export default function Navbar() {
 
         {/* ── Sub nav ── */}
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 pb-2.5">
-          {/* Popular keywords */}
-          <div className="flex items-center gap-1 flex-wrap">
-            {popular.slice(0, 5).map((kw) => (
-              <button
-                key={kw}
-                onClick={() => doSearch(kw)}
-                className="rounded-full px-3 py-0.5 text-xs text-orange-100 hover:bg-white/20 hover:text-white transition-all"
-              >
-                {kw}
-              </button>
-            ))}
-          </div>
+          <div />
 
           {/* Nav links */}
           <div className="flex items-center gap-1">

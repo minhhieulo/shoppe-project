@@ -17,29 +17,6 @@ function FilterTag({ label, onRemove }) {
   );
 }
 
-function RangeSlider({ label, min, max, value, onChange }) {
-  return (
-    <div>
-      <div className="mb-1 flex items-center justify-between text-xs text-gray-500">
-        <span>{label}</span>
-        <span className="font-medium text-orange-600">{value.toLocaleString()}đ</span>
-      </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full accent-orange-500"
-      />
-      <div className="flex justify-between text-[10px] text-gray-400">
-        <span>{min.toLocaleString()}</span>
-        <span>{max.toLocaleString()}</span>
-      </div>
-    </div>
-  );
-}
-
 function SortOption({ value, current, onChange, children }) {
   return (
     <button
@@ -84,11 +61,13 @@ export default function ProductListPage() {
     api.get("/categories").then((res) => setCategories(res.data)).catch(() => {});
   }, []);
 
+  // ✅ FIX 1: đọc cả "category" từ URL
   useEffect(() => {
-    const q = searchParams.get("q") || "";
+    const q         = searchParams.get("q")         || "";
     const flashSale = searchParams.get("flashSale") === "true";
-    const sort = searchParams.get("sort") || "newest";
-    setFilter((prev) => ({ ...prev, q, flashSale, sort }));
+    const sort      = searchParams.get("sort")      || "newest";
+    const category  = searchParams.get("category") || "";
+    setFilter((prev) => ({ ...prev, q, flashSale, sort, category }));
     setPage(1);
   }, [searchParams]);
 
@@ -99,8 +78,8 @@ export default function ProductListPage() {
         .get("/products", { params: { ...filter, page, limit: 20 } })
         .then((res) => {
           const rows = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
-          const tot = res.data?.total ?? rows.length;
-          const tp = res.data?.totalPages ?? 1;
+          const tot  = res.data?.total      ?? rows.length;
+          const tp   = res.data?.totalPages ?? 1;
           setProducts((prev) => (page === 1 ? rows : [...prev, ...rows]));
           setTotal(tot);
           setTotalPages(tp);
@@ -114,6 +93,12 @@ export default function ProductListPage() {
   const setField = useCallback((name, value) => {
     setPage(1);
     setFilter((prev) => ({ ...prev, [name]: value }));
+  }, []);
+
+  // ✅ FIX 2: click danh mục → xóa q, chỉ giữ category
+  const selectCategory = useCallback((categoryId) => {
+    setPage(1);
+    setFilter((prev) => ({ ...prev, category: categoryId, q: "" }));
   }, []);
 
   const resetFilter = () => {
@@ -142,16 +127,20 @@ export default function ProductListPage() {
 
   const popularKeywords = useMemo(() => ["iPhone", "Laptop", "Tai nghe", "Điện thoại", "Phụ kiện", "Gaming"], []);
 
-  // Active filter tags
+  // ✅ FIX 3: hiển thị tên danh mục trong tag thay vì ID
   const activeTags = useMemo(() => {
     const tags = [];
     if (filter.q) tags.push({ label: `"${filter.q}"`, clear: () => setField("q", "") });
-    if (filter.brand) tags.push({ label: filter.brand, clear: () => setField("brand", "") });
-    if (filter.inStock) tags.push({ label: "Còn hàng", clear: () => setField("inStock", false) });
-    if (filter.flashSale) tags.push({ label: "⚡ Flash Sale", clear: () => setField("flashSale", false) });
-    if (filter.rating) tags.push({ label: `≥ ${filter.rating} sao`, clear: () => setField("rating", "") });
+    if (filter.category) {
+      const cat = categories.find((c) => String(c.id) === String(filter.category));
+      tags.push({ label: cat ? cat.name : `Danh mục #${filter.category}`, clear: () => setField("category", "") });
+    }
+    if (filter.brand)     tags.push({ label: filter.brand,              clear: () => setField("brand", "") });
+    if (filter.inStock)   tags.push({ label: "Còn hàng",                clear: () => setField("inStock", false) });
+    if (filter.flashSale) tags.push({ label: "⚡ Flash Sale",           clear: () => setField("flashSale", false) });
+    if (filter.rating)    tags.push({ label: `≥ ${filter.rating} sao`, clear: () => setField("rating", "") });
     return tags;
-  }, [filter]);
+  }, [filter, categories]);
 
   const hasMore = page < totalPages;
 
@@ -159,15 +148,15 @@ export default function ProductListPage() {
     <div className="min-h-screen bg-gray-50">
       <div className="mx-auto max-w-7xl px-4 py-4">
 
-        {/* Sort bar (top) */}
+        {/* Sort bar */}
         <div className="mb-3 flex items-center gap-2 flex-wrap rounded-2xl bg-white px-4 py-3 shadow-sm">
           <span className="text-xs font-bold text-gray-500 uppercase tracking-wider mr-1">Sắp xếp:</span>
           {[
-            { value: "newest", label: "Mới nhất" },
+            { value: "newest",       label: "Mới nhất" },
             { value: "best_selling", label: "🔥 Bán chạy" },
-            { value: "price_asc", label: "Giá ↑" },
-            { value: "price_desc", label: "Giá ↓" },
-            { value: "rating", label: "⭐ Đánh giá" },
+            { value: "price_asc",    label: "Giá ↑" },
+            { value: "price_desc",   label: "Giá ↓" },
+            { value: "rating",       label: "⭐ Đánh giá" },
           ].map((s) => (
             <SortOption key={s.value} value={s.value} current={filter.sort} onChange={(v) => setField("sort", v)}>
               {s.label}
@@ -176,10 +165,9 @@ export default function ProductListPage() {
           <div className="ml-auto text-sm text-gray-500">
             {loading ? "Đang tải..." : <span><b className="text-gray-800">{total.toLocaleString()}</b> sản phẩm</span>}
           </div>
-          {/* Mobile sidebar toggle */}
           <button
             onClick={() => setSidebarOpen((v) => !v)}
-            className="hidden ml-2 rounded-xl border border-gray-200 px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-50 md:hidden"
+            className="ml-2 rounded-xl border border-gray-200 px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-50 md:hidden"
           >
             🔧 Bộ lọc
           </button>
@@ -199,7 +187,7 @@ export default function ProductListPage() {
         )}
 
         <div className="flex gap-4">
-          {/* ── Sidebar ──────────────────────────────────────────── */}
+          {/* ── Sidebar ── */}
           <AnimatePresence>
             {sidebarOpen && (
               <motion.aside
@@ -238,18 +226,27 @@ export default function ProductListPage() {
                   <p className="mb-2 text-xs font-bold uppercase tracking-widest text-gray-400">Danh mục</p>
                   <div className="space-y-0.5">
                     <button
-                      onClick={() => setField("category", "")}
-                      className={`w-full rounded-xl px-3 py-2 text-left text-sm font-medium transition-colors ${!filter.category ? "bg-orange-50 text-orange-600" : "text-gray-600 hover:bg-gray-50"}`}
+                      onClick={() => selectCategory("")}
+                      className={`w-full rounded-xl px-3 py-2 text-left text-sm font-medium transition-colors ${
+                        !filter.category ? "bg-orange-50 text-orange-600" : "text-gray-600 hover:bg-gray-50"
+                      }`}
                     >
                       Tất cả
                     </button>
                     {categories.map((c) => (
                       <button
                         key={c.id}
-                        onClick={() => setField("category", c.id)}
-                        className={`w-full rounded-xl px-3 py-2 text-left text-sm transition-colors ${filter.category == c.id ? "bg-orange-50 font-semibold text-orange-600" : "text-gray-600 hover:bg-gray-50"}`}
+                        onClick={() => selectCategory(c.id)}
+                        className={`w-full rounded-xl px-3 py-2 text-left text-sm transition-colors ${
+                          String(filter.category) === String(c.id)
+                            ? "bg-orange-50 font-semibold text-orange-600"
+                            : "text-gray-600 hover:bg-gray-50"
+                        }`}
                       >
                         {c.name}
+                        {c.product_count > 0 && (
+                          <span className="ml-1 text-[10px] text-gray-400">({c.product_count})</span>
+                        )}
                       </button>
                     ))}
                   </div>
@@ -289,14 +286,16 @@ export default function ProductListPage() {
                   <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mt-3">Đánh giá</p>
                   <div className="space-y-1">
                     {[
-                      { value: "", label: "Tất cả" },
+                      { value: "",  label: "Tất cả" },
                       { value: "4", label: "⭐⭐⭐⭐ trở lên" },
                       { value: "3", label: "⭐⭐⭐ trở lên" },
                     ].map((r) => (
                       <button
                         key={r.value}
                         onClick={() => setField("rating", r.value)}
-                        className={`w-full rounded-xl px-3 py-1.5 text-left text-xs transition-colors ${filter.rating === r.value ? "bg-orange-50 font-semibold text-orange-600" : "text-gray-600 hover:bg-gray-50"}`}
+                        className={`w-full rounded-xl px-3 py-1.5 text-left text-xs transition-colors ${
+                          filter.rating === r.value ? "bg-orange-50 font-semibold text-orange-600" : "text-gray-600 hover:bg-gray-50"
+                        }`}
                       >
                         {r.label}
                       </button>
@@ -307,7 +306,7 @@ export default function ProductListPage() {
                 {/* Filters toggle */}
                 <div className="rounded-2xl bg-white p-4 shadow-sm space-y-2">
                   {[
-                    { field: "inStock", label: "✅ Còn hàng" },
+                    { field: "inStock",   label: "✅ Còn hàng" },
                     { field: "flashSale", label: "⚡ Flash Sale" },
                   ].map(({ field, label }) => (
                     <label key={field} className="flex cursor-pointer items-center justify-between">
@@ -332,7 +331,7 @@ export default function ProductListPage() {
             )}
           </AnimatePresence>
 
-          {/* ── Product grid ─────────────────────────────────────── */}
+          {/* ── Product grid ── */}
           <section className="flex-1 min-w-0">
             <motion.div
               variants={STAGGER}

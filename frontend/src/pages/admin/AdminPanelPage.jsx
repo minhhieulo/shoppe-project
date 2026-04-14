@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { io } from "socket.io-client";
 import api from "../../services/api";
 import { formatPrice } from "../../utils/format";
 import {
@@ -167,29 +168,46 @@ function Dashboard({ stats, products, broadcast, setBroadcast, sendBroadcast, on
   const [lastRefresh, setLastRefresh] = useState(new Date());
   const periodMap = { "Ngày": "day", "Tháng": "month", "Năm": "year" };
 
+  // Dùng ref để interval luôn đọc period mới nhất mà không cần re-register
+  const periodRef = useRef(period);
+  useEffect(() => { periodRef.current = period; }, [period]);
+
+  // Dùng thẳng data backend, KHÔNG fill client-side để tránh lệch timezone
   const loadChart = useCallback(async (p) => {
+    const mode = periodMap[p];
     setPeriod(p);
     setChartLoading(true);
     try {
-      const res = await api.get(`/admin/revenue?mode=${periodMap[p]}`);
+      const res = await api.get(`/admin/revenue?mode=${mode}`);
       const raw = Array.isArray(res.data) ? res.data : (res.data?.revenueChart || []);
-      setChartData(raw);
+      // Rút gọn label: "2026-03-31" → "03-31", "2026-03" → "T3", "2026" → "2026"
+      const formatted = raw.map((r) => ({
+        ...r,
+        value: Number(r.value) || 0,   // ép string → number để recharts vẽ đúng chiều cao
+        count: Number(r.count) || 0,
+        labelShort: mode === "day"
+          ? r.label.slice(5)
+          : mode === "month"
+          ? "T" + parseInt(r.label.slice(5))
+          : r.label,
+      }));
+      setChartData(formatted);
       setLastRefresh(new Date());
     } catch {
-      setChartData(stats?.revenueChart || []);
+      setChartData([]);
     } finally {
       setChartLoading(false);
     }
-  }, [stats]);
+  }, []);
 
   // Load chart lần đầu
   useEffect(() => { loadChart("Ngày"); }, []);
 
-  // Auto-refresh biểu đồ mỗi 30 giây
+  // Auto-refresh mỗi 15 giây
   useEffect(() => {
-    const t = setInterval(() => loadChart(period), 30000);
+    const t = setInterval(() => loadChart(periodRef.current), 15000);
     return () => clearInterval(t);
-  }, [period, loadChart]);
+  }, [loadChart]);
 
   const fmtAxis = (v) => v >= 1e6 ? `${(v/1e6).toFixed(1)}M` : v >= 1e3 ? `${(v/1e3).toFixed(0)}K` : String(v);
 
@@ -252,39 +270,71 @@ function Dashboard({ stats, products, broadcast, setBroadcast, sendBroadcast, on
             </div>
           ) : (
             <ResponsiveContainer width="100%" height={220}>
-              <AreaChart data={chartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#6366f1" stopOpacity={0.2} />
-                    <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
-                <XAxis
-                  dataKey="label"
-                  tick={{ fontSize: 11, fill: "#9ca3af" }}
-                  axisLine={false}
-                  tickLine={false}
-                  interval="preserveStartEnd"
-                />
-                <YAxis
-                  tickFormatter={fmtAxis}
-                  tick={{ fontSize: 11, fill: "#9ca3af" }}
-                  axisLine={false}
-                  tickLine={false}
-                  width={52}
-                />
-                <Tooltip content={<CustomTooltip />} />
-                <Area
-                  type="monotone"
-                  dataKey="value"
-                  stroke="#6366f1"
-                  strokeWidth={2.5}
-                  fill="url(#colorRev)"
-                  dot={chartData.length <= 15 ? { r: 3, fill: "#6366f1", strokeWidth: 2, stroke: "#fff" } : false}
-                  activeDot={{ r: 5, fill: "#6366f1", stroke: "#fff", strokeWidth: 2 }}
-                />
-              </AreaChart>
+              {chartData.length <= 7 ? (
+                /* BarChart đẹp: cột mảnh có maxBarSize, gradient, bo góc */
+                <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }} barCategoryGap="40%">
+                  <defs>
+                    <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#818cf8" stopOpacity={1} />
+                      <stop offset="100%" stopColor="#6366f1" stopOpacity={0.85} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
+                  <XAxis
+                    dataKey="labelShort"
+                    tick={{ fontSize: 12, fill: "#6b7280", fontWeight: 500 }}
+                    axisLine={false}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    tickFormatter={fmtAxis}
+                    tick={{ fontSize: 11, fill: "#9ca3af" }}
+                    axisLine={false}
+                    tickLine={false}
+                    width={56}
+                  />
+                  <Tooltip
+                    content={<CustomTooltip />}
+                    cursor={{ fill: "#eef2ff", radius: 6 }}
+                  />
+                  <Bar dataKey="value" fill="url(#barGrad)" radius={[8, 8, 0, 0]} maxBarSize={72} />
+                </BarChart>
+              ) : (
+                /* AreaChart mượt khi có nhiều điểm */
+                <AreaChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#818cf8" stopOpacity={0.3} />
+                      <stop offset="100%" stopColor="#6366f1" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
+                  <XAxis
+                    dataKey="labelShort"
+                    tick={{ fontSize: 11, fill: "#9ca3af" }}
+                    axisLine={false}
+                    tickLine={false}
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis
+                    tickFormatter={fmtAxis}
+                    tick={{ fontSize: 11, fill: "#9ca3af" }}
+                    axisLine={false}
+                    tickLine={false}
+                    width={56}
+                  />
+                  <Tooltip content={<CustomTooltip />} cursor={{ stroke: "#818cf8", strokeWidth: 1, strokeDasharray: "4 4" }} />
+                  <Area
+                    type="monotone"
+                    dataKey="value"
+                    stroke="#6366f1"
+                    strokeWidth={2.5}
+                    fill="url(#colorRev)"
+                    dot={{ r: 4, fill: "#6366f1", stroke: "#fff", strokeWidth: 2 }}
+                    activeDot={{ r: 6, fill: "#6366f1", stroke: "#fff", strokeWidth: 2 }}
+                  />
+                </AreaChart>
+              )}
             </ResponsiveContainer>
           )}
         </div>
@@ -371,6 +421,42 @@ function Products({ products, categories, loadAll }) {
   const [images, setImages] = useState([]);
   const [editing, setEditing] = useState(null);
   const [editImages, setEditImages] = useState([]);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
+  const excelInputRef = useRef(null);
+  const [search, setSearch] = useState("");
+  const [confirmDialog, setConfirmDialog] = useState(null); // { message, onConfirm }
+  const [filterCat, setFilterCat] = useState("");
+
+  const filteredProducts = useMemo(() => {
+    return products.filter((p) => {
+      const matchName = p.name.toLowerCase().includes(search.toLowerCase()) ||
+        (p.brand || "").toLowerCase().includes(search.toLowerCase());
+      const matchCat = filterCat ? String(p.category_id) === filterCat : true;
+      return matchName && matchCat;
+    });
+  }, [products, search, filterCat]);
+
+  const handleImportExcel = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    setImportResult(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await api.post("/admin/products/import", fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      setImportResult({ ok: true, ...res.data });
+      await loadAll();
+    } catch (err) {
+      setImportResult({ ok: false, message: err?.response?.data?.message || "Import thất bại" });
+    } finally {
+      setImporting(false);
+      e.target.value = "";
+    }
+  };
 
   const create = async (e) => {
     e.preventDefault();
@@ -429,8 +515,56 @@ function Products({ products, categories, loadAll }) {
       </div>
 
       <div className="rounded-2xl bg-white shadow-sm border border-gray-100 overflow-hidden">
-        <div className="px-5 py-3 border-b flex items-center justify-between">
-          <h3 className="font-bold text-gray-800">Danh sách sản phẩm ({products.length})</h3>
+        <div className="px-5 py-3 border-b flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <h3 className="font-bold text-gray-800 shrink-0">
+            Danh sách sản phẩm ({filteredProducts.length}/{products.length})
+          </h3>
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Search */}
+            <div className="relative">
+              <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <input
+                type="text"
+                placeholder="Tìm tên, thương hiệu..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-8 pr-7 py-1.5 text-xs rounded-xl border border-gray-200 outline-none focus:border-indigo-400 w-44"
+              />
+              {search && (
+                <button onClick={() => setSearch("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs">✕</button>
+              )}
+            </div>
+            {/* Category filter */}
+            <select
+              value={filterCat}
+              onChange={(e) => setFilterCat(e.target.value)}
+              className="py-1.5 px-2 text-xs rounded-xl border border-gray-200 outline-none focus:border-indigo-400"
+            >
+              <option value="">Tất cả danh mục</option>
+              {categories.map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+            </select>
+            {/* Import result */}
+            {importResult && (
+              <span className={`text-xs px-2 py-1 rounded-full font-medium ${importResult.ok ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+                {importResult.ok ? `✅ ${importResult.message}` : `❌ ${importResult.message}`}
+              </span>
+            )}
+            {importResult?.ok && importResult.errors?.length > 0 && (
+              <span className="text-xs text-orange-500 font-medium">⚠️ {importResult.errors.length} dòng lỗi</span>
+            )}
+            {/* Import Excel */}
+            <input ref={excelInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImportExcel} />
+            <Btn
+              variant="ghost"
+              className="py-1.5 text-xs border border-green-300 text-green-700 hover:bg-green-50 shrink-0"
+              onClick={() => excelInputRef.current?.click()}
+              disabled={importing}
+            >
+              {importing ? "⏳ Đang import..." : "📊 Import Excel"}
+            </Btn>
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -444,8 +578,10 @@ function Products({ products, categories, loadAll }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {products.length === 0 && <tr><td colSpan={5}><EmptyState icon="📦" text="Chưa có sản phẩm nào" /></td></tr>}
-              {products.map((p) => (
+              {filteredProducts.length === 0 && (
+                <tr><td colSpan={5}><EmptyState icon="📦" text={search || filterCat ? "Không tìm thấy sản phẩm phù hợp" : "Chưa có sản phẩm nào"} /></td></tr>
+              )}
+              {filteredProducts.map((p) => (
                 <tr key={p.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3 font-medium text-gray-800">{p.name}</td>
                   <td className="px-4 py-3 text-gray-600">{formatPrice(p.price)}</td>
@@ -453,7 +589,7 @@ function Products({ products, categories, loadAll }) {
                   <td className="px-4 py-3 text-gray-500">{catMap[p.category_id] || "—"}</td>
                   <td className="px-4 py-3 space-x-2">
                     <Btn variant="ghost" className="py-1 text-xs" onClick={() => setEditing({ ...p })}>✏️ Sửa</Btn>
-                    <Btn variant="danger" className="py-1 text-xs" onClick={async () => { if (confirm("Xóa sản phẩm này?")) { await api.delete(`/admin/products/${p.id}`); await loadAll(); } }}>🗑️ Xóa</Btn>
+                    <Btn variant="danger" className="py-1 text-xs" onClick={() => setConfirmDialog({ message: `Xóa sản phẩm "${p.name}"?`, onConfirm: async () => { await api.delete(`/admin/products/${p.id}`); await loadAll(); } })}>🗑️ Xóa</Btn>
                   </td>
                 </tr>
               ))}
@@ -461,6 +597,30 @@ function Products({ products, categories, loadAll }) {
           </table>
         </div>
       </div>
+
+      {/* Confirm Dialog */}
+      {confirmDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setConfirmDialog(null)} />
+          <div className="relative rounded-2xl bg-white p-6 shadow-2xl w-80 text-center">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-100">
+              <svg className="h-6 w-6 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            </div>
+            <p className="text-sm font-semibold text-gray-800 mb-1">Xác nhận xóa</p>
+            <p className="text-xs text-gray-500 mb-5">{confirmDialog.message}</p>
+            <div className="flex gap-2">
+              <button onClick={() => setConfirmDialog(null)} className="flex-1 rounded-xl border border-gray-200 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors">
+                Hủy
+              </button>
+              <button onClick={async () => { await confirmDialog.onConfirm(); setConfirmDialog(null); }} className="flex-1 rounded-xl bg-red-500 py-2 text-sm font-semibold text-white hover:bg-red-600 transition-colors">
+                Xóa
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {editing && (
         <Modal title="✏️ Chỉnh sửa sản phẩm" onClose={() => { setEditing(null); setEditImages([]); }}>
@@ -612,29 +772,120 @@ function Orders({ orders, loadAll }) {
         </div>
       </div>
       {detail && (
-        <Modal title={`📑 Chi tiết đơn hàng #${detail.id}`} onClose={() => setDetail(null)}>
-          <div className="space-y-3 text-sm">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-xl bg-gray-50 p-3"><p className="text-xs text-gray-400 mb-1">Khách hàng</p><p className="font-semibold">{detail.customer_name}</p></div>
-              <div className="rounded-xl bg-gray-50 p-3"><p className="text-xs text-gray-400 mb-1">Trạng thái</p><Badge color={statusColor[detail.status] || "gray"}>{TRANG_THAI_VI[detail.status]}</Badge></div>
-            </div>
-            {detail.items?.length > 0 && (
-              <div className="rounded-xl bg-gray-50 p-3">
-                <p className="text-xs text-gray-400 mb-2">Sản phẩm</p>
-                {detail.items.map((item, i) => (
-                  <div key={i} className="flex justify-between py-1.5 border-b border-gray-200 last:border-0">
-                    <span className="text-gray-700">{item.name} × {item.quantity}</span>
-                    <span className="font-semibold text-indigo-600">{formatPrice(item.price * item.quantity)}</span>
-                  </div>
-                ))}
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-2xl rounded-3xl bg-white shadow-2xl overflow-hidden">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-indigo-600 to-indigo-500 px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white/20 text-white text-lg">📑</div>
+                <div>
+                  <p className="text-white font-black text-lg">Đơn hàng #{detail.id}</p>
+                  <p className="text-indigo-200 text-xs">{detail.created_at ? new Date(detail.created_at).toLocaleString("vi-VN") : ""}</p>
+                </div>
               </div>
-            )}
-            <div className="flex justify-between font-bold text-base border-t pt-3">
-              <span>Tổng cộng</span>
-              <span className="text-indigo-600">{formatPrice(detail.total_price)}</span>
+              <div className="flex items-center gap-3">
+                <span className={`rounded-full px-3 py-1 text-xs font-bold ${
+                  detail.status === "delivered" ? "bg-green-400 text-white" :
+                  detail.status === "cancelled" ? "bg-red-400 text-white" :
+                  detail.status === "shipping"  ? "bg-orange-400 text-white" :
+                  detail.status === "confirmed" ? "bg-yellow-400 text-white" :
+                  "bg-blue-400 text-white"
+                }`}>{TRANG_THAI_VI[detail.status]}</span>
+                <button onClick={() => setDetail(null)} className="flex h-8 w-8 items-center justify-center rounded-full bg-white/20 text-white hover:bg-white/30 transition-colors text-lg">×</button>
+              </div>
+            </div>
+
+            <div className="max-h-[75vh] overflow-y-auto">
+              <div className="p-6 space-y-5">
+
+                {/* Khách hàng + Thanh toán */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">👤 Khách hàng</p>
+                    <div className="flex items-center gap-3">
+                      <div className="h-10 w-10 rounded-full bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center text-white font-bold text-sm shrink-0">
+                        {(detail.customer_name || "?").charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <p className="font-bold text-gray-800 text-sm">{detail.customer_name}</p>
+                        <p className="text-xs text-gray-400 truncate">{detail.customer_email}</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">💳 Thanh toán</p>
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-gray-500">Phương thức</span>
+                        <span className="text-xs font-bold text-gray-800 uppercase">{detail.payment_method || "—"}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-gray-500">Trạng thái</span>
+                        <span className={`text-xs font-bold ${detail.payment_status === "paid" ? "text-green-600" : detail.payment_status === "failed" ? "text-red-500" : "text-yellow-600"}`}>
+                          {detail.payment_status === "paid" ? "✅ Đã thanh toán" : detail.payment_status === "failed" ? "❌ Thất bại" : "⏳ Chờ thanh toán"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Địa chỉ giao hàng */}
+                {detail.address && (
+                  <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">📍 Địa chỉ giao hàng</p>
+                    <p className="text-sm font-semibold text-gray-800">{detail.address.full_name} — {detail.address.phone}</p>
+                    <p className="text-sm text-gray-500 mt-0.5">{[detail.address.address_line, detail.address.ward, detail.address.district, detail.address.province].filter(Boolean).join(", ")}</p>
+                  </div>
+                )}
+
+                {/* Sản phẩm */}
+                {detail.items?.length > 0 && (
+                  <div className="rounded-2xl border border-gray-100 overflow-hidden">
+                    <div className="px-4 py-3 bg-gray-50 border-b border-gray-100">
+                      <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">📦 Sản phẩm ({detail.items.length})</p>
+                    </div>
+                    <div className="divide-y divide-gray-100">
+                      {detail.items.map((item, i) => {
+                        const imgSrc = item.image ? (item.image.startsWith("http") ? item.image : `http://localhost:5000${item.image}`) : null;
+                        const unitPrice = item.price;
+                        const total = unitPrice * item.quantity;
+                        return (
+                          <div key={i} className="flex items-center gap-3 px-4 py-3">
+                            {imgSrc ? (
+                              <img src={imgSrc} alt={item.name} className="h-12 w-12 rounded-xl object-cover border border-gray-100 shrink-0" onError={(e) => { e.target.style.display="none"; }} />
+                            ) : (
+                              <div className="h-12 w-12 rounded-xl bg-gray-100 flex items-center justify-center text-xl shrink-0">📦</div>
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-semibold text-gray-800 truncate">{item.name}</p>
+                              <p className="text-xs text-gray-400">{formatPrice(unitPrice)} × {item.quantity}</p>
+                            </div>
+                            <p className="text-sm font-black text-indigo-600 shrink-0">{formatPrice(total)}</p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Tổng tiền */}
+                <div className="rounded-2xl bg-indigo-50 border border-indigo-100 px-5 py-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-indigo-400 font-medium uppercase tracking-wider">Tổng cộng</p>
+                      <p className="text-2xl font-black text-indigo-700 mt-0.5">{formatPrice(detail.total_price)}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs text-indigo-400">{detail.items?.length || 0} sản phẩm</p>
+                      <p className="text-xs text-indigo-400 mt-0.5">{detail.items?.reduce((s, i) => s + i.quantity, 0) || 0} đơn vị</p>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
             </div>
           </div>
-        </Modal>
+        </div>
       )}
     </div>
   );
@@ -958,37 +1209,101 @@ function Chat() {
   const [activeUser, setActiveUser] = useState(null);
   const [thread, setThread] = useState([]);
   const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [adminId, setAdminId] = useState(null);
   const bottomRef = useRef(null);
+  const activeUserRef = useRef(null);
+  const threadCountRef = useRef(0); // theo dõi số tin, chỉ scroll khi tăng
+
+  // Lấy adminId từ profile khi mount
+  useEffect(() => {
+    api.get("/profile").then((res) => setAdminId(res.data?.user?.id ?? res.data?.id ?? null)).catch(() => {});
+  }, []);
 
   const loadConvs = useCallback(async () => {
     const res = await api.get("/chat/conversations").catch(() => null);
-    if (res) setConversations(res.data);
+    if (res) {
+      const data = Array.isArray(res.data) ? res.data : [];
+      setConversations(data);
+    }
   }, []);
 
-  useEffect(() => { loadConvs(); }, [loadConvs]);
-
-  // Auto-scroll to bottom
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    loadConvs();
+    const timer = setInterval(loadConvs, 5000);
+    return () => clearInterval(timer);
+  }, [loadConvs]);
+
+  // Kết nối socket để nhận tin realtime
+  useEffect(() => {
+    const s = io(import.meta.env.VITE_SOCKET_URL || "http://localhost:5000");
+    s.emit("join_admin_room");
+
+    s.on("chat:new", (msg) => {
+      loadConvs();
+      if (activeUserRef.current && Number(msg.sender_id) === Number(activeUserRef.current)) {
+        setThread((prev) => {
+          const exists = prev.some((m) => m.id === msg.id);
+          return exists ? prev : [...prev, msg];
+        });
+      }
+    });
+
+    return () => s.disconnect();
+  }, [loadConvs]);
+
+  // Chỉ scroll khi số tin tăng lên (tin mới), không scroll khi poll refresh
+  useEffect(() => {
+    if (thread.length > threadCountRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+    threadCountRef.current = thread.length;
   }, [thread]);
 
-  const openThread = async (userId) => {
+  const openThread = useCallback(async (userId, shouldScroll = false) => {
     setActiveUser(userId);
+    activeUserRef.current = userId;
     const res = await api.get(`/chat/thread/${userId}`).catch(() => null);
-    if (res) setThread(res.data);
-  };
+    if (res) {
+      const data = Array.isArray(res.data) ? res.data : [];
+      setThread((prev) => {
+        // Nếu số tin không đổi (poll bình thường) → không trigger scroll
+        // Nếu mở thread lần đầu (shouldScroll=true) → reset count để scroll 1 lần
+        if (shouldScroll) threadCountRef.current = 0;
+        return data;
+      });
+    }
+  }, []);
+
+  // Poll thread mỗi 4s, KHÔNG scroll khi poll
+  useEffect(() => {
+    if (!activeUser) return;
+    const timer = setInterval(() => openThread(activeUser, false), 4000);
+    return () => clearInterval(timer);
+  }, [activeUser, openThread]);
 
   const send = async () => {
-    if (!activeUser || !text.trim()) return;
-    await api.post("/chat/send", { receiver_id: activeUser, message: text });
+    if (!activeUser || !text.trim() || sending) return;
+    const trimmed = text.trim();
+    setSending(true);
     setText("");
-    openThread(activeUser);
+    try {
+      await api.post("/chat/send", { receiver_id: activeUser, message: trimmed });
+      const res = await api.get(`/chat/thread/${activeUser}`).catch(() => null);
+      if (res) setThread(Array.isArray(res.data) ? res.data : []);
+      loadConvs();
+    } catch {
+      setText(trimmed);
+    } finally {
+      setSending(false);
+    }
   };
 
   const activeConv = conversations.find((c) => c.user_id === activeUser);
 
   return (
     <div className="grid gap-4 md:grid-cols-3 h-[calc(100vh-200px)] min-h-[500px]">
+      {/* Conversation list */}
       <div className="rounded-2xl bg-white shadow-sm border border-gray-100 flex flex-col overflow-hidden">
         <div className="px-4 py-3 border-b flex items-center justify-between">
           <h3 className="font-bold text-gray-800">💬 Hội thoại</h3>
@@ -997,38 +1312,70 @@ function Chat() {
         <div className="flex-1 overflow-y-auto divide-y divide-gray-100">
           {conversations.length === 0 && <EmptyState icon="💬" text="Chưa có tin nhắn nào" />}
           {conversations.map((c) => (
-            <button key={c.user_id} onClick={() => openThread(c.user_id)} className={`block w-full px-4 py-3 text-left hover:bg-gray-50 transition-colors ${activeUser === c.user_id ? "bg-indigo-50 border-r-2 border-indigo-500" : ""}`}>
-              <p className="font-semibold text-sm text-gray-800">{c.name}</p>
-              <p className="text-xs text-gray-400 truncate">{c.last_message || c.email}</p>
+            <button
+              key={c.user_id}
+              onClick={() => openThread(c.user_id, true)}
+              className={`block w-full px-4 py-3 text-left hover:bg-gray-50 transition-colors ${activeUser === c.user_id ? "bg-indigo-50 border-r-2 border-indigo-500" : ""}`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <p className="font-semibold text-sm text-gray-800 truncate">{c.name}</p>
+                {Number(c.unread_count) > 0 && (
+                  <span className="shrink-0 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
+                    {c.unread_count}
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-gray-400 truncate mt-0.5">{c.last_message || c.email}</p>
             </button>
           ))}
         </div>
       </div>
+
+      {/* Thread */}
       <div className="md:col-span-2 rounded-2xl bg-white shadow-sm border border-gray-100 flex flex-col overflow-hidden">
         <div className="px-4 py-3 border-b bg-gray-50">
-          <h3 className="font-semibold text-gray-800">{activeConv ? `${activeConv.name} — ${activeConv.email}` : "Chọn hội thoại"}</h3>
+          <h3 className="font-semibold text-gray-800">
+            {activeConv ? `${activeConv.name} — ${activeConv.email}` : "Chọn hội thoại"}
+          </h3>
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-2">
           {!activeUser && <EmptyState icon="👈" text="Chọn người dùng để xem hội thoại" />}
-          {thread.map((m) => (
-            <div key={m.id} className={`flex ${m.sender_id === activeUser ? "justify-start" : "justify-end"}`}>
-              <div className={`max-w-xs rounded-2xl px-4 py-2 text-sm shadow-sm ${m.sender_id === activeUser ? "bg-gray-100 text-gray-800" : "bg-indigo-600 text-white"}`}>
-                {m.message}
+          {thread.map((m, idx) => {
+            // Admin = người gửi có sender_id khác activeUser (tức là admin đang reply)
+            const isFromUser = Number(m.sender_id) === Number(activeUser);
+            return (
+              <div key={m.id ?? `msg-${idx}`} className={`flex ${isFromUser ? "justify-start" : "justify-end"}`}>
+                {isFromUser && (
+                  <div className="mr-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-bold text-gray-600">
+                    {activeConv?.name?.[0]?.toUpperCase() || "U"}
+                  </div>
+                )}
+                <div className={`max-w-xs rounded-2xl px-4 py-2.5 text-sm shadow-sm ${isFromUser ? "bg-gray-100 text-gray-800 rounded-tl-sm" : "bg-indigo-600 text-white rounded-tr-sm"}`}>
+                  <p>{m.message}</p>
+                  {m.created_at && (
+                    <p className={`mt-1 text-right text-[10px] ${isFromUser ? "text-gray-400" : "text-indigo-200"}`}>
+                      {new Date(m.created_at).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })}
+                    </p>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
           <div ref={bottomRef} />
         </div>
         {activeUser && (
           <div className="px-4 py-3 border-t flex gap-2">
             <input
-              className="flex-1 rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:border-indigo-400"
+              className="flex-1 rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:border-indigo-400 disabled:opacity-60"
               placeholder="Nhập tin nhắn..."
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && send()}
+              disabled={sending}
             />
-            <Btn onClick={send}>Gửi</Btn>
+            <Btn onClick={send} disabled={sending || !text.trim()}>
+              {sending ? "..." : "Gửi"}
+            </Btn>
           </div>
         )}
       </div>
